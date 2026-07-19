@@ -10,6 +10,12 @@ import json
 from datetime import datetime
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Если установлен admin_action – передаём управление админ-обработчику
+    if context.user_data.get("admin_action"):
+        from handlers.admin import admin_handle_input
+        await admin_handle_input(update, context)
+        return
+
     user_id = update.effective_user.id
     text = update.message.text.strip()
     awaiting = context.user_data.get("awaiting")
@@ -45,20 +51,77 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             request_type=req_type,
             input_data=text,
             response_summary=result,
-            ip_address="0.0.0.0"  # будет заменено, если есть вебхук
+            ip_address="0.0.0.0"
         )
         session.add(log_entry)
         await session.commit()
     
-    # Форматируем ответ
+    # Форматируем ответ с максимальной детализацией
     if "error" in result:
-        answer = f"❌ {result['error']}"
+        answer = f"❌ *Ошибка:* {result['error']}"
     else:
         lines = []
-        for k, v in result.items():
-            if v is not None and v != "":
-                lines.append(f"• *{k}*: {v}")
-        answer = "📋 *Результат пробива:*\n" + "\n".join(lines)
+        # Заголовок
+        lines.append(f"📋 *Результат пробива по {req_type.upper()}*")
+        lines.append("")
+        # Разбиваем на группы
+        for key, value in result.items():
+            if value is None or value == "":
+                continue
+            # Делаем человеческое описание ключей
+            label = {
+                "phone": "📞 Номер",
+                "country": "🌍 Страна",
+                "country_code": "🏷 Код страны",
+                "region": "🗺 Регион",
+                "city": "🏙 Город",
+                "carrier": "📶 Оператор",
+                "line_type": "📱 Тип линии",
+                "is_valid": "✅ Валидность",
+                "international_format": "🌐 Международный формат",
+                "national_format": "🇷🇺 Национальный формат",
+                "e164_format": "🔢 E.164 формат",
+                "location": "📍 Местоположение",
+                "timezone": "🕒 Часовой пояс",
+                "latitude": "🧭 Широта",
+                "longitude": "🧭 Долгота",
+                "is_possible": "🔮 Возможен",
+                "is_risky": "⚠️ Риск",
+                "operator_info": "📡 Информация об операторе",
+                "region_code": "📌 Код региона",
+                "postal_code": "✉️ Почтовый индекс",
+                "area_code": "📞 Код города",
+                "ip": "🌐 IP-адрес",
+                "isp": "🏢 Провайдер",
+                "org": "🏛 Организация",
+                "as": "🔢 AS",
+                "domain": "🌐 Домен",
+                "registrar": "📋 Регистратор",
+                "creation_date": "📅 Дата создания",
+                "expiration_date": "⏳ Дата истечения",
+                "name_servers": "📡 DNS-серверы",
+                "emails": "📧 Электронная почта",
+                "dnssec": "🔒 DNSSEC",
+                "address": "🏠 Адрес",
+                "coordinates": "🗺 Координаты",
+                "postcode": "✉️ Почтовый индекс",
+                "first_name": "👤 Имя",
+                "last_name": "👤 Фамилия",
+                "is_closed": "🔒 Профиль закрыт",
+                "can_access_closed": "🔓 Доступ к закрытому",
+                "photo": "🖼 Фото",
+                "status": "📝 Статус",
+                "last_seen": "🕒 Последний визит"
+            }.get(key, key)
+            
+            # Преобразуем булевы значения в понятный текст
+            if isinstance(value, bool):
+                value = "✅ Да" if value else "❌ Нет"
+            elif isinstance(value, (list, dict)):
+                value = json.dumps(value, ensure_ascii=False, indent=2)
+            lines.append(f"*{label}:* {value}")
+        
+        answer = "\n".join(lines)
     
     keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]]
     await update.message.reply_text(answer, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
