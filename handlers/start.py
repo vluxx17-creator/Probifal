@@ -4,11 +4,11 @@ from config import Config
 from database import AsyncSessionLocal
 from models import User
 from datetime import datetime
+from sqlalchemy import select
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     async with AsyncSessionLocal() as session:
-        from sqlalchemy import select
         stmt = select(User).where(User.telegram_id == user.id)
         db_user = await session.execute(stmt)
         db_user = db_user.scalar_one_or_none()
@@ -18,7 +18,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 username=user.username,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                is_admin=(user.id == Config.ADMIN_ID),
+                is_admin=(user.id in Config.ADMIN_IDS),
                 free_requests={t: Config.FREE_TRIALS_PER_TYPE for t in Config.REQUEST_TYPES}
             )
             session.add(new_user)
@@ -34,7 +34,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🆘 Помощь", callback_data="help")],
         [InlineKeyboardButton("📟 Мой IP", callback_data="myip")],
     ]
-    if user.id == Config.ADMIN_ID:
+    if user.id in Config.ADMIN_IDS:
         keyboard.append([InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
