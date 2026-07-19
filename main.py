@@ -24,15 +24,13 @@ async def run_health_server():
     site = web.TCPSite(runner, "0.0.0.0", 8080)
     await site.start()
     logging.info("Health server running on port 8080")
-    # бесконечное ожидание, чтобы сервер не завершался
-    await asyncio.Event().wait()
+    await asyncio.Event().wait()  # бесконечное ожидание
 
 async def post_init(application):
     await init_db()
     logging.info("База данных инициализирована (SQLite)")
 
 def main():
-    # Запускаем health-сервер в фоновой задаче
     loop = asyncio.get_event_loop()
     loop.create_task(run_health_server())
 
