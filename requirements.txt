@@ -1,6 +1,6 @@
 python-telegram-bot==20.6
 sqlalchemy==2.0.23
-aiosqlite==0.19.0м
+aiosqlite==0.19.0
 python-dotenv==1.0.0
 tenacity==8.2.3
 python-whois==0.8.0
