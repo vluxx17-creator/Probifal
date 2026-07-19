@@ -1,3 +1,4 @@
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from services.phone import phone_lookup
@@ -9,6 +10,8 @@ from models import RequestLog
 import json
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Если установлен admin_action – передаём управление админ-обработчику
     if context.user_data.get("admin_action"):
@@ -19,6 +22,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
     awaiting = context.user_data.get("awaiting")
+    
+    logger.info(f"Получен текст от {user_id}: '{text}', awaiting='{awaiting}'")
+    
     if not awaiting:
         await update.message.reply_text("Используйте кнопки в меню. /start")
         return
@@ -61,14 +67,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = f"❌ *Ошибка:* {result['error']}"
     else:
         lines = []
-        # Заголовок
         lines.append(f"📋 *Результат пробива по {req_type.upper()}*")
         lines.append("")
-        # Разбиваем на группы
         for key, value in result.items():
             if value is None or value == "":
                 continue
-            # Делаем человеческое описание ключей
             label = {
                 "phone": "📞 Номер",
                 "country": "🌍 Страна",
@@ -114,13 +117,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "last_seen": "🕒 Последний визит"
             }.get(key, key)
             
-            # Преобразуем булевы значения в понятный текст
             if isinstance(value, bool):
                 value = "✅ Да" if value else "❌ Нет"
             elif isinstance(value, (list, dict)):
                 value = json.dumps(value, ensure_ascii=False, indent=2)
             lines.append(f"*{label}:* {value}")
-        
         answer = "\n".join(lines)
     
     keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]]
