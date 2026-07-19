@@ -2,13 +2,13 @@ import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, PreCheckoutQueryHandler
 from config import Config
 from handlers.start import start
 from handlers.buttons import button_callback
 from handlers.input import handle_text
-from handlers.payments import buy_callback
-from handlers.admin import admin_panel, admin_logs, admin_users, admin_stats, admin_iplogs
+from handlers.payments import buy_callback, precheckout, successful_payment
+from handlers.admin import admin_panel, admin_logs, admin_users, admin_stats, admin_iplogs, admin_grant, admin_add_balance, admin_handle_input
 from database import init_db
 
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +33,6 @@ async def post_init(application):
     logging.info("База данных инициализирована (SQLite)")
 
 def main():
-    # Запускаем health-сервер в отдельном потоке
     thread = threading.Thread(target=run_health_server, daemon=True)
     thread.start()
 
@@ -47,8 +46,19 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_users, pattern="^admin_users$"))
     app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
     app.add_handler(CallbackQueryHandler(admin_iplogs, pattern="^admin_iplogs$"))
+    app.add_handler(CallbackQueryHandler(admin_grant, pattern="^admin_grant$"))
+    app.add_handler(CallbackQueryHandler(admin_add_balance, pattern="^admin_add_balance$"))
     app.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.edit_message_text("Главное меню /start"), pattern="^back_to_menu$"))
+    
+    # Обработчик текстовых сообщений для админ-действий (после нажатия кнопок выдачи)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_handle_input))
+    # Стандартный обработчик для ввода данных (пробив)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    # Обратите внимание: порядок важен, admin_handle_input должен быть первым, чтобы перехватывать ответы админов
+    # Можно объединить, но лучше сделать отдельный фильтр по наличию admin_action в user_data
+    
+    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     
     logging.info("Бот запущен")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
