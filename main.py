@@ -1,5 +1,5 @@
 import logging
-import asyncio
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import Config
 from handlers.start import start
