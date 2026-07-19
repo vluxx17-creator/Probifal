@@ -1,4 +1,6 @@
 import logging
+import asyncio
+from aiohttp import web
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import Config
@@ -11,11 +13,29 @@ from database import init_db
 
 logging.basicConfig(level=logging.INFO)
 
+async def health(request):
+    return web.json_response({"status": "ok"})
+
+async def run_health_server():
+    app_web = web.Application()
+    app_web.router.add_get("/health", health)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+    logging.info("Health server running on port 8080")
+    # бесконечное ожидание, чтобы сервер не завершался
+    await asyncio.Event().wait()
+
 async def post_init(application):
     await init_db()
     logging.info("База данных инициализирована (SQLite)")
 
 def main():
+    # Запускаем health-сервер в фоновой задаче
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_health_server())
+
     app = ApplicationBuilder().token(Config.BOT_TOKEN).post_init(post_init).build()
     
     app.add_handler(CommandHandler("start", start))
