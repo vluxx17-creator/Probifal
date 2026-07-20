@@ -13,7 +13,6 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Если установлен admin_action – передаём управление админ-обработчику
     if context.user_data.get("admin_action"):
         from handlers.admin import admin_handle_input
         await admin_handle_input(update, context)
@@ -50,7 +49,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Неизвестный режим ввода. /start")
         return
     
-    # Логируем запрос
     async with AsyncSessionLocal() as session:
         log_entry = RequestLog(
             user_id=user_id,
@@ -62,7 +60,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.add(log_entry)
         await session.commit()
     
-    # Форматируем ответ с максимальной детализацией
     if "error" in result:
         answer = f"❌ *Ошибка:* {result['error']}"
     else:
@@ -72,7 +69,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for key, value in result.items():
             if value is None or value == "":
                 continue
-            # Словарь меток с добавлением новых полей
             label = {
                 "phone": "📞 Номер",
                 "country": "🌍 Страна",
