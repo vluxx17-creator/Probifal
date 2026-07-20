@@ -10,7 +10,8 @@ class Config:
     YANDEX_GEO_KEY = os.getenv("YANDEX_GEO_KEY", "")
     USE_NOMINATIM = os.getenv("USE_NOMINATIM", "False").lower() == "true"
     PHONE_API_KEY = os.getenv("PHONE_API_KEY", "")
-    PHONEINFOGA_API_URL = os.getenv("PHONEINFOGA_API_URL", "http://localhost:5000")   # <-- добавлено
+    NUMVERIFY_API_KEY = os.getenv("NUMVERIFY_API_KEY", "")  # <-- добавлено
+    PHONEINFOGA_API_URL = os.getenv("PHONEINFOGA_API_URL", "http://localhost:5000")
     
     PRICE_MAP = {
         15: 64,
