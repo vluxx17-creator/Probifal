@@ -9,7 +9,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     filters,
-    PreCheckoutQueryHandler
+    PreCheckoutQueryHandler,
 )
 from config import Config
 from handlers.start import start
@@ -23,18 +23,16 @@ from handlers.admin import (
     admin_stats,
     admin_iplogs,
     admin_grant,
-    admin_add_balance
+    admin_add_balance,
 )
 from database import init_db
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# --- Health-сервер для Render ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
@@ -50,28 +48,29 @@ def run_health_server():
     logger.info("Health server running on port 8080")
     server.serve_forever()
 
-# --- Инициализация БД после старта ---
 async def post_init(application):
     await init_db()
+    # Принудительно удаляем вебхук, чтобы избежать конфликтов
+    await application.bot.delete_webhook()
+    logger.info("Webhook удалён, запускаем polling")
     logger.info("База данных инициализирована (SQLite)")
 
-# --- Главная функция ---
 def main():
-    # Запускаем health-сервер в фоновом потоке
+    # Health-сервер
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
-    # Даём серверу время стартовать
     time.sleep(0.5)
 
-    # Создаём приложение
-    app = ApplicationBuilder().token(Config.BOT_TOKEN).post_init(post_init).build()
+    # Создаём приложение с увеличенными таймаутами
+    app = ApplicationBuilder() \
+        .token(Config.BOT_TOKEN) \
+        .connect_timeout(30.0) \
+        .read_timeout(30.0) \
+        .post_init(post_init) \
+        .build()
 
     # === Обработчики ===
-
-    # Команда /start
     app.add_handler(CommandHandler("start", start))
-
-    # Callback-запросы от инлайн-кнопок
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(phone|ip|address|vk|balance|buy|help|admin|myip)$"))
     app.add_handler(CallbackQueryHandler(buy_callback, pattern="^buy_"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
@@ -86,16 +85,21 @@ def main():
         pattern="^back_to_menu$"
     ))
 
-    # Текстовые сообщения (ввод данных) – ЕДИНСТВЕННЫЙ обработчик для обычного текста
+    # Текстовые сообщения
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Платежи через Telegram Stars
+    # Платежи
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    # Запуск polling
     logger.info("Бот запущен и готов к работе")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Запускаем polling с увеличенным таймаутом получения обновлений
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        poll_interval=1.0,
+        timeout=30,
+        drop_pending_updates=True
+    )
 
 if __name__ == "__main__":
     main()
