@@ -72,6 +72,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for key, value in result.items():
             if value is None or value == "":
                 continue
+            # Словарь меток с добавлением новых полей
             label = {
                 "phone": "📞 Номер",
                 "country": "🌍 Страна",
@@ -114,12 +115,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "can_access_closed": "🔓 Доступ к закрытому",
                 "photo": "🖼 Фото",
                 "status": "📝 Статус",
-                "last_seen": "🕒 Последний визит"
+                "last_seen": "🕒 Последний визит",
+                "footprints": "🔗 Цифровые следы",
+                "owner_hints": "👤 Возможный владелец (по следам)"
             }.get(key, key)
             
             if isinstance(value, bool):
                 value = "✅ Да" if value else "❌ Нет"
-            elif isinstance(value, (list, dict)):
+            elif isinstance(value, list):
+                if value:
+                    if key == "footprints":
+                        value = "\n".join([f"  • {url}" for url in value[:5]])
+                    else:
+                        value = ", ".join(str(v) for v in value[:5])
+                else:
+                    continue
+            elif isinstance(value, dict):
                 value = json.dumps(value, ensure_ascii=False, indent=2)
             lines.append(f"*{label}:* {value}")
         answer = "\n".join(lines)
