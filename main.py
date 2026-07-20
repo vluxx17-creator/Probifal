@@ -1,18 +1,40 @@
 import logging
 import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, PreCheckoutQueryHandler
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    PreCheckoutQueryHandler
+)
 from config import Config
 from handlers.start import start
 from handlers.buttons import button_callback
 from handlers.input import handle_text
 from handlers.payments import buy_callback, precheckout, successful_payment
-from handlers.admin import admin_panel, admin_logs, admin_users, admin_stats, admin_iplogs, admin_grant, admin_add_balance
+from handlers.admin import (
+    admin_panel,
+    admin_logs,
+    admin_users,
+    admin_stats,
+    admin_iplogs,
+    admin_grant,
+    admin_add_balance
+)
 from database import init_db
 
-logging.basicConfig(level=logging.INFO)
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
+# --- Health-сервер для Render ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
@@ -25,23 +47,31 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_health_server():
     server = HTTPServer(('0.0.0.0', 8080), HealthHandler)
-    logging.info("Health server running on port 8080")
+    logger.info("Health server running on port 8080")
     server.serve_forever()
 
+# --- Инициализация БД после старта ---
 async def post_init(application):
     await init_db()
-    logging.info("База данных инициализирована (SQLite)")
+    logger.info("База данных инициализирована (SQLite)")
 
+# --- Главная функция ---
 def main():
-    thread = threading.Thread(target=run_health_server, daemon=True)
-    thread.start()
+    # Запускаем health-сервер в фоновом потоке
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    # Даём серверу время стартовать
+    time.sleep(0.5)
 
+    # Создаём приложение
     app = ApplicationBuilder().token(Config.BOT_TOKEN).post_init(post_init).build()
-    
-    # Команды
+
+    # === Обработчики ===
+
+    # Команда /start
     app.add_handler(CommandHandler("start", start))
-    
-    # Callback-запросы (кнопки)
+
+    # Callback-запросы от инлайн-кнопок
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(phone|ip|address|vk|balance|buy|help|admin|myip)$"))
     app.add_handler(CallbackQueryHandler(buy_callback, pattern="^buy_"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
@@ -51,16 +81,20 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_iplogs, pattern="^admin_iplogs$"))
     app.add_handler(CallbackQueryHandler(admin_grant, pattern="^admin_grant$"))
     app.add_handler(CallbackQueryHandler(admin_add_balance, pattern="^admin_add_balance$"))
-    app.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.edit_message_text("Главное меню /start"), pattern="^back_to_menu$"))
-    
-    # Текстовые сообщения (ввод данных) – ЕДИНСТВЕННЫЙ обработчик
+    app.add_handler(CallbackQueryHandler(
+        lambda u, c: u.callback_query.edit_message_text("Главное меню /start"),
+        pattern="^back_to_menu$"
+    ))
+
+    # Текстовые сообщения (ввод данных) – ЕДИНСТВЕННЫЙ обработчик для обычного текста
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
-    # Платежи
+
+    # Платежи через Telegram Stars
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-    
-    logging.info("Бот запущен")
+
+    # Запуск polling
+    logger.info("Бот запущен и готов к работе")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
