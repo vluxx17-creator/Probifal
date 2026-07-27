@@ -38,6 +38,15 @@ def init_db():
             visits INTEGER DEFAULT 0
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS clones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT UNIQUE,
+            owner_id INTEGER,
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            is_active INTEGER DEFAULT 1
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -144,6 +153,37 @@ def get_mirrors_by_user(user_id):
     rows = c.fetchall()
     conn.close()
     return rows
+
+# ---------- Клоны (зеркальные боты) ----------
+def add_clone(token, owner_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO clones (token, owner_id) VALUES (?, ?)", (token, owner_id))
+    conn.commit()
+    conn.close()
+
+def get_clones_by_owner(owner_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, token, created_at, is_active FROM clones WHERE owner_id=? ORDER BY created_at DESC", (owner_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_active_clones():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, token, owner_id FROM clones WHERE is_active=1")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def deactivate_clone(clone_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE clones SET is_active=0 WHERE id=?", (clone_id,))
+    conn.commit()
+    conn.close()
 
 # ---------- Дневной лимит ----------
 def get_daily_requests(user_id):
