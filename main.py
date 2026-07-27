@@ -13,12 +13,7 @@ async def set_commands():
     await bot.set_my_commands([
         BotCommand(command="start", description="Главное меню"),
         BotCommand(command="help", description="Справка"),
-        BotCommand(command="search_vk", description="Поиск в ВК"),
-        BotCommand(command="search_ip", description="Поиск по IP"),
-        BotCommand(command="search_domain", description="Поиск по домену"),
-        BotCommand(command="search_nick", description="Поиск по нику"),
-        BotCommand(command="mirror", description="Создать зеркало"),
-        BotCommand(command="my_mirrors", description="Мои зеркала")
+        BotCommand(command="admin", description="Админ-панель")
     ])
 
 async def bot_polling():
