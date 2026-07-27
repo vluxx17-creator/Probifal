@@ -30,15 +30,6 @@ def init_db():
         )
     ''')
     c.execute('''
-        CREATE TABLE IF NOT EXISTS mirrors (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            path TEXT UNIQUE,
-            created_by INTEGER,
-            created_at INTEGER DEFAULT (strftime('%s', 'now')),
-            visits INTEGER DEFAULT 0
-        )
-    ''')
-    c.execute('''
         CREATE TABLE IF NOT EXISTS clones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token TEXT UNIQUE,
@@ -119,37 +110,6 @@ def get_all_logs(limit=100):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT * FROM logs ORDER BY timestamp DESC LIMIT ?", (limit,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-# ---------- Зеркала ----------
-def create_mirror(path, created_by):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO mirrors (path, created_by) VALUES (?, ?)", (path, created_by))
-    conn.commit()
-    conn.close()
-
-def get_mirror(path):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM mirrors WHERE path=?", (path,))
-    row = c.fetchone()
-    conn.close()
-    return row
-
-def increment_mirror_visits(path):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE mirrors SET visits = visits + 1 WHERE path=?", (path,))
-    conn.commit()
-    conn.close()
-
-def get_mirrors_by_user(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT path, visits, created_at FROM mirrors WHERE created_by=? ORDER BY created_at DESC", (user_id,))
     rows = c.fetchall()
     conn.close()
     return rows
