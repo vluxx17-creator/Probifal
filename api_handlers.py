@@ -102,46 +102,17 @@ async def search_by_phone(phone):
                     data = await resp.json()
                     if data.get("valid"):
                         return {
-                            "phone": phone,
-                            "country": data.get("country_name"),
-                            "country_code": data.get("country_code"),
-                            "location": data.get("location"),
-                            "carrier": data.get("carrier"),
-                            "line_type": data.get("line_type"),
-                            "valid": True
+                            "номер": phone,
+                            "страна": data.get("country_name"),
+                            "код_страны": data.get("country_code"),
+                            "регион": data.get("location"),
+                            "оператор": data.get("carrier"),
+                            "тип_линии": data.get("line_type"),
+                            "валидность": "Да" if data.get("valid") else "Нет"
                         }
                     else:
                         return {"error": "Неверный номер или данные не найдены."}
         except Exception as e:
             return {"error": f"Ошибка при запросе к numverify: {str(e)}"}
     else:
-        # Расширенная заглушка
-        import random
-        phone_clean = ''.join(filter(str.isdigit, phone))
-        if len(phone_clean) < 10:
-            return {"error": "Номер слишком короткий."}
-        country_codes = {
-            "7": {"country": "Россия", "operators": {"903": "Билайн", "916": "МТС", "926": "Мегафон", "977": "Yota", "999": "Tele2"}},
-            "1": {"country": "США", "operators": {"202": "AT&T", "310": "Verizon", "415": "T-Mobile"}},
-            "44": {"country": "Великобритания", "operators": {"770": "EE", "771": "O2", "772": "Vodafone"}},
-        }
-        country_code = phone_clean[0] if phone_clean.startswith('7') else phone_clean[:2]
-        operator_code = phone_clean[1:4] if phone_clean.startswith('7') else phone_clean[2:5]
-        country_info = country_codes.get(country_code, {"country": "Неизвестно", "operators": {}})
-        operator_name = country_info["operators"].get(operator_code, "Неизвестный оператор")
-        first_names = ["Алексей", "Мария", "Иван", "Екатерина", "Сергей", "Ольга", "Дмитрий", "Анна"]
-        last_names = ["Смирнов", "Иванова", "Кузнецов", "Петрова", "Соколов", "Михайлова"]
-        random.seed(int(phone_clean[:6]))
-        name = f"{random.choice(first_names)} {random.choice(last_names)}"
-        return {
-            "phone": phone,
-            "country": country_info["country"],
-            "operator": operator_name,
-            "region": "Москва" if operator_code.startswith('9') else "Регион",
-            "line_type": "Мобильный" if phone_clean.startswith('7') else "Стационарный",
-            "carrier": operator_name,
-            "status": "активен",
-            "registred": f"{random.randint(2010, 2025)}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}",
-            "possible_name": name,
-            "note": "Данные основаны на открытых источниках."
-        }
+        return {"error": "API ключ numverify не задан."}
