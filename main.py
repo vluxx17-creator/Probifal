@@ -1,105 +1,36 @@
-import logging
+import asyncio
 import threading
-import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-    PreCheckoutQueryHandler,
-)
-from config import Config
-from handlers.start import start
-from handlers.buttons import button_callback
-from handlers.input import handle_text
-from handlers.payments import buy_callback, precheckout, successful_payment
-from handlers.admin import (
-    admin_panel,
-    admin_logs,
-    admin_users,
-    admin_stats,
-    admin_iplogs,
-    admin_grant,
-    admin_add_balance,
-)
-from database import init_db
+import uvicorn
+import os
+from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand
+import config
+from bot_handlers import dp, bot
+from web_app import app
+import db
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+async def set_commands():
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="help", description="Справка"),
+        BotCommand(command="search_vk", description="Поиск в ВК"),
+        BotCommand(command="search_ip", description="Поиск по IP"),
+        BotCommand(command="search_domain", description="Поиск по домену"),
+        BotCommand(command="search_nick", description="Поиск по нику"),
+        BotCommand(command="mirror", description="Создать зеркало"),
+        BotCommand(command="my_mirrors", description="Мои зеркала")
+    ])
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(b'{"status": "ok"}')
-        else:
-            self.send_response(404)
+async def bot_polling():
+    await set_commands()
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot, skip_updates=True)
 
-def run_health_server():
-    server = HTTPServer(('0.0.0.0', 8080), HealthHandler)
-    logger.info("Health server running on port 8080")
-    server.serve_forever()
-
-async def post_init(application):
-    await init_db()
-    # Принудительно удаляем вебхук, чтобы избежать конфликтов
-    await application.bot.delete_webhook()
-    logger.info("Webhook удалён, запускаем polling")
-    logger.info("База данных инициализирована (SQLite)")
-
-def main():
-    # Health-сервер
-    health_thread = threading.Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-    time.sleep(0.5)
-
-    # Создаём приложение с увеличенными таймаутами
-    app = ApplicationBuilder() \
-        .token(Config.BOT_TOKEN) \
-        .connect_timeout(30.0) \
-        .read_timeout(30.0) \
-        .post_init(post_init) \
-        .build()
-
-    # === Обработчики ===
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(phone|ip|address|vk|balance|buy|help|admin|myip)$"))
-    app.add_handler(CallbackQueryHandler(buy_callback, pattern="^buy_"))
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
-    app.add_handler(CallbackQueryHandler(admin_logs, pattern="^admin_logs$"))
-    app.add_handler(CallbackQueryHandler(admin_users, pattern="^admin_users$"))
-    app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
-    app.add_handler(CallbackQueryHandler(admin_iplogs, pattern="^admin_iplogs$"))
-    app.add_handler(CallbackQueryHandler(admin_grant, pattern="^admin_grant$"))
-    app.add_handler(CallbackQueryHandler(admin_add_balance, pattern="^admin_add_balance$"))
-    app.add_handler(CallbackQueryHandler(
-        lambda u, c: u.callback_query.edit_message_text("Главное меню /start"),
-        pattern="^back_to_menu$"
-    ))
-
-    # Текстовые сообщения
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # Платежи
-    app.add_handler(PreCheckoutQueryHandler(precheckout))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-
-    logger.info("Бот запущен и готов к работе")
-    # Запускаем polling с увеличенным таймаутом получения обновлений
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        poll_interval=1.0,
-        timeout=30,
-        drop_pending_updates=True
-    )
+def run_web():
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
-    main()
+    db.init_db()
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    asyncio.run(bot_polling())
