@@ -1,5 +1,5 @@
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, SuccessfulPayment
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -19,7 +19,7 @@ class AdminStates(StatesGroup):
     waiting_broadcast = State()
     waiting_promote_user = State()
     waiting_reset_user = State()
-    waiting_clone_token = State()  # для создания клона
+    waiting_clone_token = State()
 
 # ---------- МЕНЮ ----------
 def main_menu():
@@ -57,7 +57,7 @@ def admin_menu():
     ])
     return kb
 
-# ---------- СТАРТ ----------
+# ---------- КОМАНДЫ (регистрируем первыми) ----------
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     user = message.from_user
@@ -85,7 +85,93 @@ async def help_cmd(message: Message):
         parse_mode="HTML"
     )
 
-# ---------- ОБРАБОТЧИКИ МЕНЮ ----------
+@dp.message(Command("admin"))
+async def admin_cmd(message: Message):
+    # Принудительно даём админа, если ID совпадает
+    if message.from_user.id == config.ADMIN_ID:
+        db.set_admin(message.from_user.id, 1)
+    if not db.is_admin(message.from_user.id):
+        await message.answer("⛔ Нет прав.")
+        return
+    await message.answer("⚙️ Админ-панель", reply_markup=admin_menu())
+
+# ---------- ОБРАБОТЧИКИ СОСТОЯНИЙ (идут сразу после команд) ----------
+@dp.message(AdminStates.waiting_clone_token)
+async def handle_clone_token(message: Message, state: FSMContext):
+    token = message.text.strip()
+    if not token.startswith("7") or len(token) < 40:
+        await message.answer("❌ Похоже, это невалидный токен. Убедитесь, что вы скопировали токен от @BotFather целиком.", parse_mode="HTML")
+        return
+    try:
+        test_bot = Bot(token=token)
+        me = await test_bot.get_me()
+        if not me.username:
+            raise Exception("Нет username")
+    except Exception as e:
+        await message.answer(f"❌ Не удалось подключиться к боту. Ошибка: {e}", parse_mode="HTML")
+        return
+    db.add_clone(token, message.from_user.id)
+    await message.answer(f"✅ Бот <b>@{me.username}</b> успешно добавлен как копия Phantom. Он запущен и работает.", parse_mode="HTML")
+    await state.clear()
+
+@dp.message(AdminStates.waiting_user_id)
+async def admin_give_access(message: Message, state: FSMContext):
+    parts = message.text.strip().split()
+    if len(parts) == 2 and parts[1].isdigit():
+        user_id = int(parts[0]); days = int(parts[1])
+        until = int(datetime.datetime.now().timestamp()) + days*86400
+        db.update_subscription(user_id, until)
+        db.reset_requests_for_user(user_id)
+        await message.answer(f"✅ Пользователю {user_id} выдан доступ на {days} дней.", parse_mode="HTML")
+    else:
+        await message.answer("Неверный формат. Используйте: ID пробел количество_дней", parse_mode="HTML")
+    await state.clear()
+
+@dp.message(AdminStates.waiting_days)
+async def admin_revoke(message: Message, state: FSMContext):
+    user_id = int(message.text.strip()) if message.text.strip().isdigit() else None
+    if user_id:
+        db.update_subscription(user_id, 0)
+        await message.answer(f"✅ Подписка пользователя {user_id} отозвана.", parse_mode="HTML")
+    else:
+        await message.answer("Введите корректный ID.", parse_mode="HTML")
+    await state.clear()
+
+@dp.message(AdminStates.waiting_reset_user)
+async def admin_reset_requests(message: Message, state: FSMContext):
+    user_id = int(message.text.strip()) if message.text.strip().isdigit() else None
+    if user_id:
+        db.reset_requests_for_user(user_id)
+        await message.answer(f"✅ Лимит запросов пользователя {user_id} сброшен.", parse_mode="HTML")
+    else:
+        await message.answer("Введите корректный ID.", parse_mode="HTML")
+    await state.clear()
+
+@dp.message(AdminStates.waiting_promote_user)
+async def admin_promote(message: Message, state: FSMContext):
+    user_id = int(message.text.strip()) if message.text.strip().isdigit() else None
+    if user_id:
+        db.set_admin(user_id, 1)
+        await message.answer(f"✅ Пользователь {user_id} назначен администратором.", parse_mode="HTML")
+    else:
+        await message.answer("Введите корректный ID.", parse_mode="HTML")
+    await state.clear()
+
+@dp.message(AdminStates.waiting_broadcast)
+async def broadcast_text(message: Message, state: FSMContext):
+    text = message.text
+    users = db.get_all_users()
+    count = 0
+    for user in users:
+        try:
+            await bot.send_message(user[0], text, parse_mode="HTML")
+            count += 1
+        except:
+            pass
+    await message.answer(f"Рассылка отправлена {count} пользователям.", parse_mode="HTML")
+    await state.clear()
+
+# ---------- ОБРАБОТЧИКИ CALLBACK (меню) ----------
 @dp.callback_query(lambda c: c.data.startswith("menu_"))
 async def menu_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -95,7 +181,6 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext):
     elif data == "menu_search":
         await callback.message.edit_text("<b>Выберите тип пробива:</b>", reply_markup=search_menu(), parse_mode="HTML")
     elif data == "menu_logger":
-        # Генерируем фишинг-ссылку
         await create_phishing_link(callback.message)
         await callback.message.edit_text("Фишинг-ссылка создана!", reply_markup=main_menu(), parse_mode="HTML")
     elif data == "menu_create_clone":
@@ -156,25 +241,7 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext):
         )
         await callback.message.answer("Для оплаты нажмите кнопку ниже.")
 
-# ---------- ФИШИНГ-ССЫЛКА ----------
-async def create_phishing_link(message):
-    user_id = message.from_user.id
-    host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
-    # Генерируем уникальный путь: user_id + случайная строка
-    rand = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-    path = f"{user_id}_{rand}"
-    full_link = f"https://{host}/log/{path}"
-    db.add_log(user_id, "create_phishing_link", path, full_link)
-    await message.answer(
-        f"<b>📡 Ваша фишинг-ссылка:</b>\n\n<code>{full_link}</code>\n\nПри переходе по ней будут собраны IP, геоданные, User-Agent и реферер. Всё придёт вам сюда.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Открыть", url=full_link)],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
-        ]),
-        parse_mode="HTML"
-    )
-
-# ---------- ПОИСК ----------
+# ---------- ПОИСК (обработка callback поиска) ----------
 @dp.callback_query(lambda c: c.data.startswith("search_"))
 async def search_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -193,8 +260,13 @@ async def search_callback(callback: CallbackQuery, state: FSMContext):
     }
     await callback.message.answer(prompts.get(search_type, "Введите данные:"), parse_mode="HTML")
 
+# ---------- ОБЩИЙ ОБРАБОТЧИК ТЕКСТА (только если нет состояния) ----------
 @dp.message(lambda message: True)
 async def handle_search_input(message: Message, state: FSMContext):
+    # Проверяем, есть ли активное состояние — если есть, пропускаем
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
     data = await state.get_data()
     search_type = data.get("search_type")
     if not search_type:
@@ -225,6 +297,7 @@ async def handle_search_input(message: Message, state: FSMContext):
     await send_search_result(message, result, search_type, query)
     await state.clear()
 
+# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 async def send_search_result(message, data, search_type, query):
     if isinstance(data, dict) and "error" in data:
         output = f"<b>❌ Ошибка:</b> <code>{data['error']}</code>"
@@ -239,28 +312,24 @@ async def send_search_result(message, data, search_type, query):
     await message.answer(output, parse_mode="HTML")
     db.add_log(message.from_user.id, f"search_{search_type}", query, output[:500])
 
-# ---------- КЛОНЫ ----------
-@dp.message(AdminStates.waiting_clone_token)
-async def handle_clone_token(message: Message, state: FSMContext):
-    token = message.text.strip()
-    if not token.startswith("7") or len(token) < 40:
-        await message.answer("Похоже, это невалидный токен. Убедитесь, что вы скопировали токен от @BotFather целиком.", parse_mode="HTML")
-        return
-    # Проверяем токен
-    try:
-        test_bot = Bot(token=token)
-        me = await test_bot.get_me()
-        if not me.username:
-            raise Exception("Не удалось получить username")
-    except Exception as e:
-        await message.answer(f"❌ Не удалось подключиться к боту. Ошибка: {e}", parse_mode="HTML")
-        return
-    # Сохраняем токен
-    db.add_clone(token, message.from_user.id)
-    await message.answer(f"✅ Бот <b>@{me.username}</b> успешно добавлен как копия Phantom. Он запущен и работает.", parse_mode="HTML")
-    # Запускаем клона (это будет сделано в main.py при старте, но для немедленного запуска можно создать задачу)
-    # Для простоты перезапустим всех клонов в main.py при добавлении
-    await state.clear()
+async def create_phishing_link(message):
+    user_id = message.from_user.id
+    # Определяем домен: сначала PHISHING_DOMAIN, потом RENDER_EXTERNAL_HOSTNAME
+    host = os.getenv("PHISHING_DOMAIN") or os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    if not host:
+        host = "localhost"
+    rand = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    path = f"{user_id}_{rand}"
+    full_link = f"https://{host}/log/{path}"
+    db.add_log(user_id, "create_phishing_link", path, full_link)
+    await message.answer(
+        f"<b>📡 Ваша фишинг-ссылка:</b>\n\n<code>{full_link}</code>\n\nПри переходе по ней будут собраны IP, геоданные, User-Agent и реферер. Всё придёт вам сюда.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Открыть", url=full_link)],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+        ]),
+        parse_mode="HTML"
+    )
 
 # ---------- ОПЛАТА ----------
 @dp.pre_checkout_query()
@@ -282,17 +351,13 @@ async def successful_payment(message: Message):
     except:
         pass
 
-# ---------- АДМИН ----------
-@dp.message(Command("admin"))
-async def admin_cmd(message: Message):
-    if not db.is_admin(message.from_user.id):
-        await message.answer("⛔ Нет прав.")
-        return
-    await message.answer("⚙️ Админ-панель", reply_markup=admin_menu())
-
+# ---------- АДМИН-КОЛБЭКИ ----------
 @dp.callback_query(lambda c: c.data.startswith("admin_"))
 async def admin_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    # Принудительно даём админа, если ID совпадает
+    if callback.from_user.id == config.ADMIN_ID:
+        db.set_admin(callback.from_user.id, 1)
     if not db.is_admin(callback.from_user.id):
         await callback.message.answer("⛔ Нет прав.", parse_mode="HTML")
         return
@@ -315,8 +380,6 @@ async def admin_callback(callback: CallbackQuery, state: FSMContext):
         else:
             text = "<b>Последние логи (с IP):</b>\n\n"
             for log in logs:
-                # log: (id, user_id, action, query, result, timestamp)
-                # result может быть JSON, покажем первые 100 символов
                 text += f"<code>{log[1]}</code> | {log[2]} | {log[3]} | {log[4][:100]}\n"
             await callback.message.answer(text[:4000], parse_mode="HTML")
     elif data == "admin_give":
@@ -331,61 +394,3 @@ async def admin_callback(callback: CallbackQuery, state: FSMContext):
     elif data == "admin_promote":
         await callback.message.answer("Введите ID пользователя, которому назначить админа:", parse_mode="HTML")
         await state.set_state(AdminStates.waiting_promote_user)
-
-# FSM админа
-@dp.message(AdminStates.waiting_broadcast)
-async def broadcast_text(message: Message, state: FSMContext):
-    text = message.text
-    users = db.get_all_users()
-    count = 0
-    for user in users:
-        try:
-            await bot.send_message(user[0], text, parse_mode="HTML")
-            count += 1
-        except:
-            pass
-    await message.answer(f"Рассылка отправлена {count} пользователям.", parse_mode="HTML")
-    await state.clear()
-
-@dp.message(AdminStates.waiting_user_id)
-async def admin_give_access(message: Message, state: FSMContext):
-    parts = message.text.strip().split()
-    if len(parts) == 2 and parts[1].isdigit():
-        user_id = int(parts[0]); days = int(parts[1])
-        until = int(datetime.datetime.now().timestamp()) + days*86400
-        db.update_subscription(user_id, until)
-        db.reset_requests_for_user(user_id)
-        await message.answer(f"✅ Пользователю {user_id} выдан доступ на {days} дней.", parse_mode="HTML")
-    else:
-        await message.answer("Неверный формат. Используйте: ID пробел количество_дней", parse_mode="HTML")
-    await state.clear()
-
-@dp.message(AdminStates.waiting_days)
-async def admin_revoke(message: Message, state: FSMContext):
-    user_id = int(message.text.strip()) if message.text.strip().isdigit() else None
-    if user_id:
-        db.update_subscription(user_id, 0)
-        await message.answer(f"✅ Подписка пользователя {user_id} отозвана.", parse_mode="HTML")
-    else:
-        await message.answer("Введите корректный ID.", parse_mode="HTML")
-    await state.clear()
-
-@dp.message(AdminStates.waiting_reset_user)
-async def admin_reset_requests(message: Message, state: FSMContext):
-    user_id = int(message.text.strip()) if message.text.strip().isdigit() else None
-    if user_id:
-        db.reset_requests_for_user(user_id)
-        await message.answer(f"✅ Лимит запросов пользователя {user_id} сброшен.", parse_mode="HTML")
-    else:
-        await message.answer("Введите корректный ID.", parse_mode="HTML")
-    await state.clear()
-
-@dp.message(AdminStates.waiting_promote_user)
-async def admin_promote(message: Message, state: FSMContext):
-    user_id = int(message.text.strip()) if message.text.strip().isdigit() else None
-    if user_id:
-        db.set_admin(user_id, 1)
-        await message.answer(f"✅ Пользователь {user_id} назначен администратором.", parse_mode="HTML")
-    else:
-        await message.answer("Введите корректный ID.", parse_mode="HTML")
-    await state.clear()
