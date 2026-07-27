@@ -106,6 +106,14 @@ def get_user_logs(user_id):
     conn.close()
     return rows
 
+def get_all_logs(limit=100):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM logs ORDER BY timestamp DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 # ---------- Зеркала ----------
 def create_mirror(path, created_by):
     conn = sqlite3.connect(DB_PATH)
@@ -137,7 +145,7 @@ def get_mirrors_by_user(user_id):
     conn.close()
     return rows
 
-# ---------- Дневной лимит запросов ----------
+# ---------- Дневной лимит ----------
 def get_daily_requests(user_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -149,7 +157,7 @@ def get_daily_requests(user_id):
     return 0, 0
 
 def reset_daily_requests_if_needed(user_id):
-    today = int(datetime.datetime.now().timestamp() // 86400)  # день с начала эпохи
+    today = int(datetime.datetime.now().timestamp() // 86400)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT daily_requests, last_request_date FROM users WHERE user_id=?", (user_id,))
@@ -172,7 +180,6 @@ def increment_daily_requests(user_id):
     conn.close()
 
 def can_make_request(user_id):
-    # Для админа и подписчиков лимит не действует
     if is_admin(user_id) or is_subscribed(user_id):
         return True, None
     reset_daily_requests_if_needed(user_id)
@@ -180,3 +187,10 @@ def can_make_request(user_id):
     if daily >= 2:
         return False, "Вы исчерпали лимит на сегодня (2 запроса). Купите подписку для неограниченного доступа."
     return True, None
+
+def reset_requests_for_user(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET daily_requests=0, last_request_date=? WHERE user_id=?", (int(datetime.datetime.now().timestamp()), user_id))
+    conn.commit()
+    conn.close()
