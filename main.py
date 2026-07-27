@@ -40,7 +40,7 @@ async def bot_polling():
     await dp.start_polling(bot, skip_updates=True)
 
 def run_web():
-    set_bot(bot)
+    set_bot(bot)  # передаём бота в веб-приложение
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
