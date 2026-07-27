@@ -1,4 +1,9 @@
 BOT_TOKEN = "8900768249:AAHy_p_pGpcZTugbU1UnmRti-thQqln7HS4"
 ADMIN_ID = 8297446667
 VK_TOKEN = "vk1.a.aQ5jl3VxN4hRI7MJ8ZFWxt10jqB3wtcpsfj9P1YjCsgIr8F6WfljyMx6tWJH4mqERcbXeKHQXp1rAZm6cNQh3SUubpboTgtNPDkc3JPyQOpZaOcNGa_VwOE77xEa19NI3nosISIyOAhp-dpamXUMvdKNK1Rsp4wEyrbo-yMJTy-7IzbjreOo9SAPGIM-qB8PL89U9_7IPbI9LU-mVHqR3g"
-STARS_RECEIVER = "boyfrer"  # или его numeric ID
+
+# Для numverify (опционально)
+NUMVERIFY_API_KEY = ""  # если есть ключ, вставьте
+
+# Кому отправлять уведомления о покупке (ID админа)
+STARS_RECEIVER = ADMIN_ID
