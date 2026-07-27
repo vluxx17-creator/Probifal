@@ -1,6 +1,6 @@
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, SuccessfulPayment
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import config, db, api_handlers
@@ -17,31 +17,24 @@ class AdminStates(StatesGroup):
     waiting_user_id = State()
     waiting_days = State()
 
-# ---------- ДЕКОРАТОР АДМИНА ----------
-def admin_required(func):
-    async def wrapper(message: Message, *args, **kwargs):
-        if db.is_admin(message.from_user.id):
-            return await func(message, *args, **kwargs)
-        else:
-            await message.answer("⛔ <b>Только для администратора.</b>", parse_mode="HTML")
-    return wrapper
-
-# ---------- МЕНЮ ----------
+# ---------- ГЛАВНОЕ МЕНЮ ----------
 def main_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔍 Поиск", callback_data="menu_search")],
-        [InlineKeyboardButton(text="📡 Логер / Зеркала", callback_data="menu_logger")],
+        [InlineKeyboardButton(text="🔍 Пробив", callback_data="menu_search")],
         [InlineKeyboardButton(text="🪞 Создать зеркало", callback_data="menu_create_mirror")],
-        [InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="menu_admin")]
+        [InlineKeyboardButton(text="📡 Логер", callback_data="menu_logger")],
+        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
+        [InlineKeyboardButton(text="⭐ Купить подписку", callback_data="menu_buy_subscription")]
     ])
     return kb
 
 def search_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 ВК по имени", callback_data="search_vk")],
+        [InlineKeyboardButton(text="👤 VK по имени", callback_data="search_vk")],
         [InlineKeyboardButton(text="🌐 IP-адрес", callback_data="search_ip")],
         [InlineKeyboardButton(text="🏠 Домен (whois)", callback_data="search_domain")],
         [InlineKeyboardButton(text="🔎 Никнейм", callback_data="search_nick")],
+        [InlineKeyboardButton(text="📱 Номер телефона", callback_data="search_phone")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
     ])
     return kb
@@ -56,28 +49,31 @@ def admin_menu():
     ])
     return kb
 
-# ---------- КОМАНДЫ ----------
+# ---------- КОМАНДА /start ----------
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     user = message.from_user
     db.add_user(user.id, user.username, user.first_name, user.last_name)
     if user.id == config.ADMIN_ID:
         db.set_admin(user.id, 1)
+    # Проверяем, есть ли у пользователя остаток запросов
+    can, _ = db.can_make_request(user.id)
+    if not can:
+        remaining = 0
+    else:
+        daily, _ = db.get_daily_requests(user.id)
+        remaining = 2 - daily if not db.is_subscribed(user.id) else "∞"
+    status_text = f"Осталось запросов сегодня: {remaining}" if isinstance(remaining, int) else "Безлимит (подписка)"
+    
     await message.answer(
-        "<b>🕵️ Phantom — мощный инструмент для поиска и сбора данных</b>\n\n"
-        "Я умею:\n"
-        "• 👤 Искать людей в ВКонтакте по имени\n"
-        "• 🌐 Определять геолокацию и провайдера по IP\n"
-        "• 🏠 Получать whois-информацию о доменах\n"
-        "• 🔎 Проверять никнеймы на популярных платформах\n"
-        "• 📡 Создавать зеркала для сбора статистики о переходах\n\n"
-        "Используйте кнопки ниже или команды:\n"
-        "/search_vk <имя>\n"
-        "/search_ip <IP>\n"
-        "/search_domain <домен>\n"
-        "/search_nick <ник>\n"
-        "/mirror — создать новое зеркало\n"
-        "/my_mirrors — список ваших зеркал",
+        f"<b>🕵️ Phantom — универсальный инструмент для поиска и сбора данных</b>\n\n"
+        f"<i>{status_text}</i>\n\n"
+        "Выберите действие в меню ниже:\n"
+        "• <b>Пробив</b> – поиск по VK, IP, домену, нику или телефону\n"
+        "• <b>Зеркало</b> – создайте ссылку для сбора данных о посетителях\n"
+        "• <b>Логер</b> – просмотр ваших зеркал и статистики\n"
+        "• <b>Профиль</b> – информация о подписке\n"
+        "• <b>Купить подписку</b> – оформите доступ к расширенным функциям",
         reply_markup=main_menu(),
         parse_mode="HTML"
     )
@@ -86,73 +82,180 @@ async def start_cmd(message: Message):
 async def help_cmd(message: Message):
     await message.answer(
         "<b>📖 Справка Phantom</b>\n\n"
-        "🔹 <b>Поиск</b> – выберите тип и введите запрос\n"
-        "🔹 <b>Зеркала</b> – создавайте уникальные ссылки для сбора данных\n"
-        "🔹 <b>Админ-панель</b> – только для администратора\n\n"
-        "Команды:\n"
-        "/start – главное меню\n"
-        "/search_vk <имя>\n"
-        "/search_ip <IP>\n"
-        "/search_domain <домен>\n"
-        "/search_nick <ник>\n"
-        "/mirror – создать зеркало\n"
-        "/my_mirrors – список зеркал",
+        "Все функции доступны через кнопки в главном меню.\n"
+        "Если вы администратор, используйте команду /admin для панели управления.",
         parse_mode="HTML"
     )
 
-# ---------- ПОИСК (без подписки) ----------
-@dp.message(Command("search_vk"))
-async def cmd_search_vk(message: Message, command: CommandObject):
-    query = command.args
+# ---------- ОБРАБОТЧИКИ МЕНЮ ----------
+@dp.callback_query(lambda c: c.data.startswith("menu_"))
+async def menu_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = callback.data
+
+    if data == "menu_main":
+        await callback.message.edit_text(
+            "<b>🕵️ Phantom — главное меню</b>",
+            reply_markup=main_menu(),
+            parse_mode="HTML"
+        )
+    elif data == "menu_search":
+        await callback.message.edit_text(
+            "<b>🔍 Выберите тип пробива:</b>",
+            reply_markup=search_menu(),
+            parse_mode="HTML"
+        )
+    elif data == "menu_create_mirror":
+        await create_mirror_for_user(callback.message)
+        await callback.message.edit_text(
+            "Зеркало создано! Вернитесь в главное меню.",
+            reply_markup=main_menu(),
+            parse_mode="HTML"
+        )
+    elif data == "menu_logger":
+        mirrors = db.get_mirrors_by_user(callback.from_user.id)
+        if mirrors:
+            text = "<b>📡 Ваши зеркала:</b>\n\n"
+            for path, visits, created_at in mirrors:
+                created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
+                host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
+                link = f"https://{host}/mirror/{path}"
+                text += f"🔗 <a href='{link}'>{link}</a>\n"
+                text += f"   👁️ посещений: {visits}, создано: {created_str}\n\n"
+            await callback.message.edit_text(text[:4000], reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+            ]), parse_mode="HTML", disable_web_page_preview=True)
+        else:
+            await callback.message.edit_text(
+                "У вас пока нет зеркал. Создайте новое через кнопку «Создать зеркало».",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+                ]),
+                parse_mode="HTML"
+            )
+    elif data == "menu_profile":
+        user_id = callback.from_user.id
+        user = db.get_user(user_id)
+        if user:
+            sub_until = user[4]
+            if sub_until and sub_until > int(datetime.datetime.now().timestamp()):
+                days_left = (sub_until - int(datetime.datetime.now().timestamp())) // 86400
+                status = f"✅ Активна, осталось {days_left} дн."
+            else:
+                status = "❌ Неактивна"
+            # Получаем остаток запросов
+            can, _ = db.can_make_request(user_id)
+            if can:
+                daily, _ = db.get_daily_requests(user_id)
+                remaining = 2 - daily if not db.is_subscribed(user_id) else "∞"
+            else:
+                remaining = 0
+            text = f"<b>👤 Ваш профиль</b>\n\n"
+            text += f"ID: <code>{user[0]}</code>\n"
+            text += f"Имя: {user[2]} {user[3]}\n"
+            text += f"Статус подписки: {status}\n"
+            text += f"Остаток запросов сегодня: {remaining}\n"
+            if user[5] == 1:
+                text += "🔹 Вы администратор\n"
+        else:
+            text = "Профиль не найден."
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+        ]), parse_mode="HTML")
+    elif data == "menu_buy_subscription":
+        await bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title="Подписка Phantom на 30 дней",
+            description="Полный доступ ко всем функциям бота на 30 дней",
+            payload="subscription_30days",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="Подписка 30 дней", amount=100)],
+            start_parameter="subscribe"
+        )
+        await callback.message.answer("💳 Для оплаты нажмите кнопку ниже.")
+    elif data == "menu_admin":
+        if not db.is_admin(callback.from_user.id):
+            await callback.message.answer("⛔ <b>Нет прав.</b>", parse_mode="HTML")
+            return
+        await callback.message.edit_text(
+            "<b>⚙️ Админ-панель</b>",
+            reply_markup=admin_menu(),
+            parse_mode="HTML"
+        )
+
+# ---------- ОБРАБОТЧИКИ ПОИСКА ----------
+@dp.callback_query(lambda c: c.data.startswith("search_"))
+async def search_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    search_type = callback.data.replace("search_", "")
+    # Проверяем лимит перед тем, как предложить ввести данные
+    can, msg = db.can_make_request(callback.from_user.id)
+    if not can:
+        await callback.message.answer(f"⛔ {msg}", parse_mode="HTML")
+        return
+    await state.set_data({"search_type": search_type})
+    prompts = {
+        "vk": "Введите <b>имя</b> для поиска в ВК (например: <i>Иван Петров</i>):",
+        "ip": "Введите <b>IP-адрес</b> (например: <code>8.8.8.8</code>):",
+        "domain": "Введите <b>домен</b> (например: <code>example.com</code>):",
+        "nick": "Введите <b>никнейм</b> (например: <i>john_doe</i>):",
+        "phone": "Введите <b>номер телефона</b> в международном формате (например: <code>79001234567</code>):"
+    }
+    await callback.message.answer(prompts.get(search_type, "Введите данные:"), parse_mode="HTML")
+
+# ---------- ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ (ввод данных) ----------
+@dp.message(lambda message: True)
+async def handle_search_input(message: Message, state: FSMContext):
+    data = await state.get_data()
+    search_type = data.get("search_type")
+    if not search_type:
+        return
+    query = message.text.strip()
     if not query:
-        await message.answer("Укажите имя, например: /search_vk Иван", parse_mode="HTML")
+        await message.answer("Введите непустое значение.", parse_mode="HTML")
         return
-    data = await api_handlers.search_vk_by_name(query)
-    await send_search_result(message, data, "VK", query)
 
-@dp.message(Command("search_ip"))
-async def cmd_search_ip(message: Message, command: CommandObject):
-    query = command.args
-    if not query:
-        await message.answer("Укажите IP, например: /search_ip 8.8.8.8", parse_mode="HTML")
+    # Проверяем лимит ещё раз (пользователь мог ввести данные позже)
+    can, msg = db.can_make_request(message.from_user.id)
+    if not can:
+        await message.answer(f"⛔ {msg}", parse_mode="HTML")
+        await state.clear()
         return
-    data = await api_handlers.search_by_ip(query)
-    await send_search_result(message, data, "IP", query)
 
-@dp.message(Command("search_domain"))
-async def cmd_search_domain(message: Message, command: CommandObject):
-    query = command.args
-    if not query:
-        await message.answer("Укажите домен, например: /search_domain example.com", parse_mode="HTML")
+    # Увеличиваем счётчик запросов
+    db.increment_daily_requests(message.from_user.id)
+
+    func_map = {
+        "vk": api_handlers.search_vk_by_name,
+        "ip": api_handlers.search_by_ip,
+        "domain": api_handlers.search_by_domain,
+        "nick": api_handlers.search_by_nick,
+        "phone": api_handlers.search_by_phone
+    }
+    func = func_map.get(search_type)
+    if not func:
+        await message.answer("Неизвестный тип поиска.", parse_mode="HTML")
+        await state.clear()
         return
-    data = await api_handlers.search_by_domain(query)
-    await send_search_result(message, data, "домен", query)
 
-@dp.message(Command("search_nick"))
-async def cmd_search_nick(message: Message, command: CommandObject):
-    query = command.args
-    if not query:
-        await message.answer("Укажите никнейм, например: /search_nick john_doe", parse_mode="HTML")
-        return
-    data = await api_handlers.search_by_nick(query)
-    await send_search_result(message, data, "никнейм", query)
+    result = await func(query)
+    await send_search_result(message, result, search_type, query)
+    await state.clear()
 
-# ---------- ЗЕРКАЛА ----------
-@dp.message(Command("mirror"))
-async def cmd_create_mirror(message: Message):
-    await create_mirror_for_user(message)
-
-@dp.message(Command("my_mirrors"))
-async def cmd_my_mirrors(message: Message):
-    mirrors = db.get_mirrors_by_user(message.from_user.id)
-    if not mirrors:
-        await message.answer("У вас пока нет созданных зеркал.", parse_mode="HTML")
-        return
-    text = "<b>Ваши зеркала:</b>\n\n"
-    for path, visits, created_at in mirrors:
-        created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
-        text += f"🔗 /mirror/{path} — посещений: {visits}, создано: {created_str}\n"
-    await message.answer(text[:4000], parse_mode="HTML")
+async def send_search_result(message, data, search_type, query):
+    if isinstance(data, dict) and "error" in data:
+        output = f"<b>❌ Ошибка:</b> <code>{data['error']}</code>"
+    else:
+        if search_type == "phone":
+            output = "<b>📱 Результаты пробива по номеру телефона:</b>\n\n"
+            for key, value in data.items():
+                output += f"<b>{key}</b>: {value}\n"
+        else:
+            output = f"<b>✅ Результаты пробива ({search_type}):</b>\n<pre>{json.dumps(data, ensure_ascii=False, indent=2)[:3000]}</pre>"
+    output += "\n\n<blockquote>Данные получены из открытых источников.</blockquote>"
+    await message.answer(output, parse_mode="HTML")
+    db.add_log(message.from_user.id, f"search_{search_type}", query, output[:500])
 
 async def create_mirror_for_user(message):
     host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "localhost")
@@ -167,7 +270,7 @@ async def create_mirror_for_user(message):
         "Все переходы будут зафиксированы в логах.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Открыть зеркало", url=full_link)],
-            [InlineKeyboardButton(text="📋 Мои зеркала", callback_data="menu_my_mirrors")]
+            [InlineKeyboardButton(text="📋 Мои зеркала", callback_data="menu_logger")]
         ]),
         parse_mode="HTML"
     )
@@ -175,119 +278,44 @@ async def create_mirror_for_user(message):
 def generate_mirror_path(length=8):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
-# ---------- ОБЩАЯ ФУНКЦИЯ ВЫВОДА РЕЗУЛЬТАТОВ ----------
-async def send_search_result(message, data, search_type, query):
-    if isinstance(data, dict) and "error" in data:
-        output = f"<b>❌ Ошибка:</b> <code>{data['error']}</code>"
-    else:
-        output = f"<b>✅ Результаты поиска ({search_type}):</b>\n<pre>{json.dumps(data, ensure_ascii=False, indent=2)[:3000]}</pre>"
-    output += "\n\n<blockquote>Данные получены из открытых источников.</blockquote>"
-    await message.answer(output, parse_mode="HTML")
-    db.add_log(message.from_user.id, f"search_{search_type}", query, output[:500])
+# ---------- ОПЛАТА ПОДПИСКИ ----------
+@dp.pre_checkout_query()
+async def pre_checkout_query(pre_checkout: PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
 
-# ---------- ОБРАБОТЧИКИ МЕНЮ ----------
-@dp.callback_query(lambda c: c.data.startswith("menu_"))
-async def menu_callback(callback: CallbackQuery):
-    await callback.answer()
-    data = callback.data
-    if data == "menu_main":
-        await callback.message.edit_text(
-            "<b>🕵️ Phantom — главное меню</b>",
-            reply_markup=main_menu(),
-            parse_mode="HTML"
+@dp.message(F.successful_payment)
+async def successful_payment(message: Message):
+    user_id = message.from_user.id
+    until = int(datetime.datetime.now().timestamp()) + 30*86400
+    db.update_subscription(user_id, until)
+    # После покупки сбрасываем счётчик запросов (чтобы сразу можно было пользоваться)
+    conn = sqlite3.connect(db.DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET daily_requests=0, last_request_date=? WHERE user_id=?", (int(datetime.datetime.now().timestamp()), user_id))
+    conn.commit()
+    conn.close()
+    await message.answer(
+        "⭐ <b>Оплата прошла успешно!</b>\n\n"
+        "Ваша подписка активирована на 30 дней.\n"
+        "Теперь вам доступны все функции пробива без ограничений.",
+        parse_mode="HTML"
+    )
+    try:
+        await bot.send_message(
+            chat_id=config.STARS_RECEIVER,
+            text=f"⭐ Получена оплата подписки от пользователя {user_id} (@{message.from_user.username})"
         )
-    elif data == "menu_search":
-        await callback.message.edit_text(
-            "<b>🔍 Выберите тип поиска:</b>",
-            reply_markup=search_menu(),
-            parse_mode="HTML"
-        )
-    elif data == "menu_logger":
-        mirrors = db.get_mirrors_by_user(callback.from_user.id)
-        if mirrors:
-            text = "<b>Ваши зеркала:</b>\n"
-            for path, visits, created_at in mirrors:
-                created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
-                text += f"🔗 /mirror/{path} — посещений: {visits}, создано: {created_str}\n"
-            await callback.message.edit_text(text[:4000], parse_mode="HTML")
-        else:
-            await callback.message.edit_text(
-                "У вас пока нет зеркал. Создайте новое через кнопку «Создать зеркало».",
-                parse_mode="HTML"
-            )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
-        ])
-        await callback.message.edit_reply_markup(reply_markup=kb)
-    elif data == "menu_create_mirror":
-        await create_mirror_for_user(callback.message)
-        await callback.message.edit_text(
-            "Зеркало создано! Используйте кнопки ниже.",
-            reply_markup=main_menu(),
-            parse_mode="HTML"
-        )
-    elif data == "menu_my_mirrors":
-        mirrors = db.get_mirrors_by_user(callback.from_user.id)
-        if not mirrors:
-            await callback.message.answer("У вас пока нет зеркал.", parse_mode="HTML")
-            return
-        text = "<b>Ваши зеркала:</b>\n\n"
-        for path, visits, created_at in mirrors:
-            created_str = datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
-            text += f"🔗 /mirror/{path} — посещений: {visits}, создано: {created_str}\n"
-        await callback.message.answer(text[:4000], parse_mode="HTML")
-    elif data == "menu_admin":
-        if not db.is_admin(callback.from_user.id):
-            await callback.message.answer("⛔ <b>Нет прав.</b>", parse_mode="HTML")
-            return
-        await callback.message.edit_text(
-            "<b>⚙️ Админ-панель</b>",
-            reply_markup=admin_menu(),
-            parse_mode="HTML"
-        )
+    except Exception as e:
+        pass
 
-@dp.callback_query(lambda c: c.data.startswith("search_"))
-async def search_callback(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    search_type = callback.data.replace("search_", "")
-    await state.set_data({"search_type": search_type})
-    prompts = {
-        "vk": "Введите <b>имя</b> для поиска в ВК (например: <i>Иван Петров</i>):",
-        "ip": "Введите <b>IP-адрес</b> (например: <code>8.8.8.8</code>):",
-        "domain": "Введите <b>домен</b> (например: <code>example.com</code>):",
-        "nick": "Введите <b>никнейм</b> (например: <i>john_doe</i>):"
-    }
-    await callback.message.answer(prompts.get(search_type, "Введите данные:"), parse_mode="HTML")
-
-# ---------- ОБРАБОТЧИК ТЕКСТА (для поиска) ----------
-@dp.message(lambda message: True)
-async def handle_search_input(message: Message, state: FSMContext):
-    data = await state.get_data()
-    search_type = data.get("search_type")
-    if not search_type:
+# ---------- АДМИН ----------
+@dp.message(Command("admin"))
+async def admin_cmd(message: Message):
+    if not db.is_admin(message.from_user.id):
+        await message.answer("⛔ Нет прав.")
         return
-    query = message.text.strip()
-    if not query:
-        await message.answer("Введите непустое значение.", parse_mode="HTML")
-        return
+    await message.answer("⚙️ Админ-панель", reply_markup=admin_menu())
 
-    func_map = {
-        "vk": api_handlers.search_vk_by_name,
-        "ip": api_handlers.search_by_ip,
-        "domain": api_handlers.search_by_domain,
-        "nick": api_handlers.search_by_nick
-    }
-    func = func_map.get(search_type)
-    if not func:
-        await message.answer("Неизвестный тип поиска.", parse_mode="HTML")
-        await state.clear()
-        return
-
-    result = await func(query)
-    await send_search_result(message, result, search_type, query)
-    await state.clear()
-
-# ---------- АДМИН-КОЛБЭКИ ----------
 @dp.callback_query(lambda c: c.data.startswith("admin_"))
 async def admin_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -313,7 +341,6 @@ async def admin_callback(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("Введите <b>ID пользователя</b> для просмотра логов:", parse_mode="HTML")
         await state.set_state(AdminStates.waiting_days)
 
-# FSM для админа
 @dp.message(AdminStates.waiting_user_id)
 async def admin_give_access(message: Message, state: FSMContext):
     parts = message.text.strip().split()
@@ -322,6 +349,12 @@ async def admin_give_access(message: Message, state: FSMContext):
         days = int(parts[1])
         until = int(datetime.datetime.now().timestamp()) + days*86400
         db.update_subscription(user_id, until)
+        # Сбрасываем счётчик
+        conn = sqlite3.connect(db.DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE users SET daily_requests=0, last_request_date=? WHERE user_id=?", (int(datetime.datetime.now().timestamp()), user_id))
+        conn.commit()
+        conn.close()
         await message.answer(f"✅ <b>Пользователю {user_id} выдан доступ на {days} дней.</b>", parse_mode="HTML")
     else:
         await message.answer("Неверный формат. Используйте: <code>ID пробел количество_дней</code>", parse_mode="HTML")
