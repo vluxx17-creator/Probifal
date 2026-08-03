@@ -1,4 +1,6 @@
+import os
 import asyncio
+import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 import config
@@ -34,4 +36,8 @@ async def bot_polling():
 
 if __name__ == "__main__":
     db.init_db()
-    asyncio.run(bot_polling())
+    port = int(os.environ.get("PORT", 8000))  # <-- ГЛАВНОЕ ИСПРАВЛЕНИЕ
+    # Запускаем веб-сервер (если он нужен для Render)
+    # Если веб-сервер не нужен — запускаем только бота
+    # Для Render нужен процесс, который слушает порт
+    uvicorn.run("web_app:app", host="0.0.0.0", port=port)
