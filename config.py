@@ -2,8 +2,15 @@ BOT_TOKEN = "8900768249:AAHy_p_pGpcZTugbU1UnmRti-thQqln7HS4"
 ADMIN_ID = 8297446667
 VK_TOKEN = "vk1.a.aQ5jl3VxN4hRI7MJ8ZFWxt10jqB3wtcpsfj9P1YjCsgIr8F6WfljyMx6tWJH4mqERcbXeKHQXp1rAZm6cNQh3SUubpboTgtNPDkc3JPyQOpZaOcNGa_VwOE77xEa19NI3nosISIyOAhp-dpamXUMvdKNK1Rsp4wEyrbo-yMJTy-7IzbjreOo9SAPGIM-qB8PL89U9_7IPbI9LU-mVHqR3g"
 
-# Ключ numverify (реальный)
+# Ключ numverify для определения оператора по номеру
 NUMVERIFY_API_KEY = "a8b553b3ae4d13093d797b8c76047f3f"
 
-# Получатель уведомлений о покупке (ID админа)
-STARS_RECEIVER = ADMIN_ID
+# Тарифы (запросы → цена в звёздах)
+TARIFFS = {
+    20: 75,
+    30: 150,
+    50: 200,
+    100: 300,
+    500: 600,
+    1000: 1200
+}
