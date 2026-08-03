@@ -4,6 +4,7 @@ import json
 from vk_api import VkApi
 from vk_api.exceptions import ApiError
 import config
+import html
 
 async def search_vk_by_name(name):
     try:
@@ -28,9 +29,9 @@ async def search_vk_by_name(name):
         error_code = e.error.get('error_code')
         error_msg = e.error.get('error_msg')
         if error_code == 5:
-            return {"error": "Неверный или истёкший токен VK. Получите новый через vkhost.github.io"}
+            return {"error": "Неверный или истёкший токен VK."}
         elif error_code == 6:
-            return {"error": "Слишком много запросов к VK API. Подождите."}
+            return {"error": "Слишком много запросов к VK API."}
         else:
             return {"error": f"VK API error {error_code}: {error_msg}"}
     except Exception as e:
@@ -65,6 +66,7 @@ async def search_by_domain(domain):
 
 async def search_by_nick(nick):
     results = {}
+    # GitHub
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"https://api.github.com/users/{nick}", timeout=10) as resp:
@@ -76,12 +78,14 @@ async def search_by_nick(nick):
     except:
         results["github"] = None
 
+    # VK
     vk_data = await search_vk_by_name(nick)
     if isinstance(vk_data, list) and len(vk_data) > 0:
         results["vk"] = [{"id": u["id"], "name": f"{u['first_name']} {u['last_name']}"} for u in vk_data[:3]]
     else:
         results["vk"] = None
 
+    # Другие платформы
     for platform, url in [("telegram", f"https://t.me/{nick}"), 
                           ("twitter", f"https://twitter.com/{nick}"),
                           ("instagram", f"https://instagram.com/{nick}")]:
@@ -94,6 +98,16 @@ async def search_by_nick(nick):
     return results
 
 async def search_by_phone(phone):
+    """
+    Реальный поиск по номеру телефона:
+    - Оператор через numverify
+    - Поиск в VK по номеру (через users.search с текстом номера)
+    - Проверка наличия в открытых профилях (Instagram, Telegram) — через HTTP-запросы
+    """
+    result = {}
+    phone_clean = ''.join(filter(str.isdigit, phone))
+
+    # 1. Оператор через numverify
     if config.NUMVERIFY_API_KEY:
         try:
             url = f"http://apilayer.net/api/validate?access_key={config.NUMVERIFY_API_KEY}&number={phone}&country_code=&format=1"
@@ -101,18 +115,69 @@ async def search_by_phone(phone):
                 async with session.get(url, timeout=15) as resp:
                     data = await resp.json()
                     if data.get("valid"):
-                        return {
-                            "номер": phone,
-                            "страна": data.get("country_name"),
-                            "код_страны": data.get("country_code"),
-                            "регион": data.get("location"),
-                            "оператор": data.get("carrier"),
-                            "тип_линии": data.get("line_type"),
-                            "валидность": "Да" if data.get("valid") else "Нет"
-                        }
+                        result["оператор"] = data.get("carrier")
+                        result["страна"] = data.get("country_name")
+                        result["регион"] = data.get("location")
+                        result["тип_линии"] = data.get("line_type")
                     else:
-                        return {"error": "Неверный номер или данные не найдены."}
-        except Exception as e:
-            return {"error": f"Ошибка при запросе к numverify: {str(e)}"}
+                        result["оператор"] = "Не определён"
+        except:
+            result["оператор"] = "Ошибка API"
     else:
-        return {"error": "API ключ numverify не задан."}
+        result["оператор"] = "Ключ не задан"
+
+    # 2. Поиск в VK по номеру (как текстовый запрос)
+    try:
+        vk_session = VkApi(token=config.VK_TOKEN)
+        vk = vk_session.get_api()
+        # Ищем пользователей, у которых в профиле указан этот номер (редко, но бывает)
+        vk_result = vk.users.search(q=phone, count=5, fields="city,country,photo_max")
+        if vk_result.get('items'):
+            users = []
+            for u in vk_result['items']:
+                users.append({
+                    "id": u.get("id"),
+                    "name": f"{u.get('first_name')} {u.get('last_name')}",
+                    "city": u.get("city", {}).get("title") if u.get("city") else None,
+                    "photo": u.get("photo_max")
+                })
+            result["vk"] = users
+        else:
+            result["vk"] = None
+    except Exception as e:
+        result["vk"] = {"error": str(e)}
+
+    # 3. Проверка Instagram — номер может быть указан в bio, но не гарантировано
+    # Пытаемся найти профиль по номеру (нестандартно, но иногда номер в username)
+    # Для демонстрации используем проверку существования страницы с номером как username
+    insta_url = f"https://instagram.com/{phone_clean}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(insta_url, timeout=10, allow_redirects=False) as resp:
+                if resp.status == 200:
+                    result["instagram"] = insta_url
+                else:
+                    result["instagram"] = None
+    except:
+        result["instagram"] = None
+
+    # 4. Telegram — номер не является username, поэтому проверяем только если номер совпадает с username (редко)
+    tg_url = f"https://t.me/{phone_clean}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(tg_url, timeout=10, allow_redirects=False) as resp:
+                if resp.status == 200:
+                    result["telegram"] = tg_url
+                else:
+                    result["telegram"] = None
+    except:
+        result["telegram"] = None
+
+    # 5. GitHub — номер не используется
+    result["github"] = None
+
+    # 6. Если ничего не найдено — явно указываем
+    if not any([result.get("vk"), result.get("instagram"), result.get("telegram"), result.get("github")]):
+        result["соцсети"] = "Не найдены"
+
+    return result
