@@ -12,11 +12,9 @@ def init_db():
             username TEXT,
             first_name TEXT,
             last_name TEXT,
-            subscription_until INTEGER DEFAULT 0,
             is_admin INTEGER DEFAULT 0,
             created_at INTEGER DEFAULT (strftime('%s', 'now')),
-            daily_requests INTEGER DEFAULT 0,
-            last_request_date INTEGER DEFAULT 0
+            requests_balance INTEGER DEFAULT 0
         )
     ''')
     c.execute('''
@@ -57,20 +55,6 @@ def add_user(user_id, username, first_name, last_name):
     conn.commit()
     conn.close()
 
-def update_subscription(user_id, until_timestamp):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE users SET subscription_until=? WHERE user_id=?", (until_timestamp, user_id))
-    conn.commit()
-    conn.close()
-
-def is_subscribed(user_id):
-    row = get_user(user_id)
-    if not row:
-        return False
-    until = row[4]
-    return until > int(datetime.datetime.now().timestamp())
-
 def set_admin(user_id, admin_flag=1):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -80,7 +64,7 @@ def set_admin(user_id, admin_flag=1):
 
 def is_admin(user_id):
     row = get_user(user_id)
-    return row and row[5] == 1
+    return row and row[4] == 1
 
 def add_log(user_id, action, query, result):
     conn = sqlite3.connect(DB_PATH)
@@ -114,7 +98,40 @@ def get_all_logs(limit=100):
     conn.close()
     return rows
 
-# ---------- Клоны (зеркальные боты) ----------
+# ---------- Баланс запросов ----------
+def get_balance(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT requests_balance FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def add_requests(user_id, amount):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET requests_balance = requests_balance + ? WHERE user_id=?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+def use_request(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET requests_balance = requests_balance - 1 WHERE user_id=? AND requests_balance > 0", (user_id,))
+    affected = c.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
+def can_make_request(user_id):
+    if is_admin(user_id):
+        return True, None
+    balance = get_balance(user_id)
+    if balance <= 0:
+        return False, "У вас закончились запросы. Пополните баланс в разделе «Купить запросы»."
+    return True, None
+
+# ---------- Клоны ----------
 def add_clone(token, owner_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -142,55 +159,5 @@ def deactivate_clone(clone_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("UPDATE clones SET is_active=0 WHERE id=?", (clone_id,))
-    conn.commit()
-    conn.close()
-
-# ---------- Дневной лимит ----------
-def get_daily_requests(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT daily_requests, last_request_date FROM users WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return row[0], row[1]
-    return 0, 0
-
-def reset_daily_requests_if_needed(user_id):
-    today = int(datetime.datetime.now().timestamp() // 86400)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT daily_requests, last_request_date FROM users WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    if row:
-        last_date = row[1] // 86400 if row[1] else 0
-        if last_date != today:
-            c.execute("UPDATE users SET daily_requests=0, last_request_date=? WHERE user_id=?", (int(datetime.datetime.now().timestamp()), user_id))
-            conn.commit()
-            conn.close()
-            return True
-    conn.close()
-    return False
-
-def increment_daily_requests(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE users SET daily_requests = daily_requests + 1, last_request_date = ? WHERE user_id=?", (int(datetime.datetime.now().timestamp()), user_id))
-    conn.commit()
-    conn.close()
-
-def can_make_request(user_id):
-    if is_admin(user_id) or is_subscribed(user_id):
-        return True, None
-    reset_daily_requests_if_needed(user_id)
-    daily, _ = get_daily_requests(user_id)
-    if daily >= 2:
-        return False, "Вы исчерпали лимит на сегодня (2 запроса). Купите подписку для неограниченного доступа."
-    return True, None
-
-def reset_requests_for_user(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE users SET daily_requests=0, last_request_date=? WHERE user_id=?", (int(datetime.datetime.now().timestamp()), user_id))
     conn.commit()
     conn.close()
