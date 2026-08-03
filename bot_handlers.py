@@ -1,6 +1,6 @@
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject, StateFilter
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, SuccessfulPayment
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, SuccessfulPayment, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import config, db, api_handlers
@@ -10,6 +10,7 @@ import os
 import random
 import string
 import html
+import io
 
 bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher()
@@ -22,7 +23,7 @@ class AdminStates(StatesGroup):
     waiting_reset_user = State()
     waiting_clone_token = State()
 
-# ---------- МЕНЮ (кнопки в 2 строки) ----------
+# ---------- МЕНЮ ----------
 def main_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -50,7 +51,8 @@ def search_menu():
             InlineKeyboardButton(text="🔎 Никнейм", callback_data="search_nick")
         ],
         [
-            InlineKeyboardButton(text="📱 Номер телефона", callback_data="search_phone")
+            InlineKeyboardButton(text="📱 Номер телефона", callback_data="search_phone"),
+            InlineKeyboardButton(text="📡 Telegram юзернейм", callback_data="search_tg")
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")
@@ -117,7 +119,8 @@ async def start_cmd(message: Message):
         "• <b>IP-адрес</b> — геолокация, провайдер, координаты\n"
         "• <b>Домен</b> — whois-информация, регистратор, даты\n"
         "• <b>Никнейм</b> — проверка на GitHub, Telegram, Twitter, Instagram, VK\n"
-        "• <b>Номер телефона</b> — оператор, страна, регион + поиск в соцсетях\n\n"
+        "• <b>Номер телефона</b> — оператор, страна, регион + поиск в соцсетях\n"
+        "• <b>Telegram юзернейм</b> — проверка существования профиля\n\n"
         f"💰 <b>Ваш баланс:</b> {balance} запросов\n"
         f"{admin_text}\n"
         "Выберите действие:"
@@ -176,7 +179,7 @@ async def admin_give_requests(message: Message, state: FSMContext):
 async def admin_reset_balance(message: Message, state: FSMContext):
     user_id = int(message.text.strip()) if message.text.strip().isdigit() else None
     if user_id:
-        # Устанавливаем баланс в 0
+        import sqlite3
         conn = sqlite3.connect(db.DB_PATH)
         c = conn.cursor()
         c.execute("UPDATE users SET requests_balance=0 WHERE user_id=?", (user_id,))
@@ -325,7 +328,8 @@ async def search_callback(callback: CallbackQuery, state: FSMContext):
         "ip": "Введите IP-адрес:",
         "domain": "Введите домен:",
         "nick": "Введите никнейм:",
-        "phone": "Введите номер телефона в международном формате (например, 79001234567):"
+        "phone": "Введите номер телефона в международном формате (например, 79001234567):",
+        "tg": "Введите юзернейм Telegram (без @):"
     }
     await callback.message.answer(prompts.get(search_type, "Введите данные:"), parse_mode="HTML")
 
@@ -347,14 +351,14 @@ async def handle_search_input(message: Message, state: FSMContext):
         await message.answer(f"⛔ {html.escape(msg)}", parse_mode="HTML")
         await state.clear()
         return
-    # Списываем запрос
     db.use_request(message.from_user.id)
     func_map = {
         "vk": api_handlers.search_vk_by_name,
         "ip": api_handlers.search_by_ip,
         "domain": api_handlers.search_by_domain,
         "nick": api_handlers.search_by_nick,
-        "phone": api_handlers.search_by_phone
+        "phone": api_handlers.search_by_phone,
+        "tg": api_handlers.search_by_tg_username
     }
     func = func_map.get(search_type)
     if not func:
@@ -362,28 +366,167 @@ async def handle_search_input(message: Message, state: FSMContext):
         await state.clear()
         return
     result = await func(query)
-    await send_search_result(message, result, search_type, query)
+    await send_beautiful_report(message, result, search_type, query)
     await state.clear()
 
-async def send_search_result(message, data, search_type, query):
+# ---------- ОТЧЁТЫ ----------
+async def send_beautiful_report(message, data, search_type, query):
     if isinstance(data, dict) and "error" in data:
-        output = f"<b>❌ Ошибка:</b> <code>{html.escape(data['error'])}</code>"
+        text = f"<b>❌ Ошибка:</b> <code>{html.escape(data['error'])}</code>"
+        await message.answer(text, parse_mode="HTML")
+        return
+
+    if search_type == "phone":
+        text = format_phone_report(data)
+    elif search_type == "tg":
+        text = format_tg_report(data)
+    elif search_type == "vk":
+        text = format_vk_report(data)
+    elif search_type == "ip":
+        text = format_ip_report(data)
+    elif search_type == "domain":
+        text = format_domain_report(data)
+    elif search_type == "nick":
+        text = format_nick_report(data)
     else:
-        if search_type == "phone":
-            output = "<b>📱 Результаты по номеру телефона:</b>\n\n"
-            for key, value in data.items():
-                if isinstance(value, dict):
-                    output += f"<b>{key}:</b>\n"
-                    for k, v in value.items():
-                        output += f"  {k}: {html.escape(str(v))}\n"
-                else:
-                    output += f"<b>{key}</b>: {html.escape(str(value))}\n"
+        json_str = json.dumps(data, ensure_ascii=False, indent=2)
+        text = f"<b>Результаты ({html.escape(search_type)}):</b>\n<pre>{html.escape(json_str[:3000])}</pre>"
+    
+    text += "\n\n<blockquote>Данные получены из открытых источников.</blockquote>"
+    await message.answer(text, parse_mode="HTML")
+
+    file_text = create_txt_report(data, search_type, query)
+    if len(file_text) > 500 or search_type in ["phone", "tg"]:
+        txt_file = io.BytesIO(file_text.encode('utf-8'))
+        txt_file.name = f"report_{search_type}_{query}.txt"
+        await message.answer_document(
+            FSInputFile(txt_file, filename=txt_file.name),
+            caption=f"📄 Полный отчёт по запросу «{html.escape(query)}»"
+        )
+
+def format_phone_report(data):
+    lines = []
+    lines.append("📱 <b>Отчёт по номеру телефона</b>")
+    lines.append("")
+    for key in ["оператор", "страна", "регион", "тип_линии"]:
+        if key in data and data[key]:
+            lines.append(f"• <b>{key.capitalize()}:</b> {html.escape(str(data[key]))}")
+    lines.append("")
+    lines.append("🌐 <b>Найдено в соцсетях:</b>")
+    if data.get("vk"):
+        lines.append("  🔹 VK:")
+        for u in data["vk"]:
+            lines.append(f"    • ID: {u['id']}, Имя: {html.escape(u['name'])}, Город: {html.escape(u['city']) if u['city'] else '—'}")
+    else:
+        lines.append("  • VK: не найден")
+    if data.get("instagram"):
+        lines.append(f"  • Instagram: {html.escape(data['instagram'])}")
+    else:
+        lines.append("  • Instagram: не найден")
+    if data.get("telegram"):
+        lines.append(f"  • Telegram: {html.escape(data['telegram'])}")
+    else:
+        lines.append("  • Telegram: не найден")
+    return "\n".join(lines)
+
+def format_tg_report(data):
+    lines = []
+    lines.append("📡 <b>Отчёт по Telegram пользователю</b>")
+    lines.append("")
+    if data.get("error"):
+        lines.append(f"❌ {html.escape(data['error'])}")
+        return "\n".join(lines)
+    if data.get("exists"):
+        lines.append("✅ Профиль найден")
+        lines.append(f"• <b>Ссылка:</b> {html.escape(data.get('profile_url', '—'))}")
+        if data.get('message'):
+            lines.append(f"• <i>{html.escape(data['message'])}</i>")
+    else:
+        lines.append("❌ Профиль не найден")
+    return "\n".join(lines)
+
+def format_vk_report(data):
+    if not isinstance(data, list):
+        return "❌ Ошибка: данные не получены"
+    lines = []
+    lines.append("👤 <b>Результаты поиска VK</b>")
+    for u in data:
+        lines.append("")
+        lines.append(f"• <b>ID:</b> {u['id']}")
+        lines.append(f"• <b>Имя:</b> {html.escape(u['first_name'])} {html.escape(u['last_name'])}")
+        if u.get('city'):
+            lines.append(f"• <b>Город:</b> {html.escape(u['city'])}")
+        if u.get('country'):
+            lines.append(f"• <b>Страна:</b> {html.escape(u['country'])}")
+        if u.get('bdate'):
+            lines.append(f"• <b>Дата рождения:</b> {html.escape(u['bdate'])}")
+        if u.get('sex'):
+            lines.append(f"• <b>Пол:</b> {html.escape(u['sex'])}")
+        if u.get('photo'):
+            lines.append(f"• <b>Фото:</b> {html.escape(u['photo'])}")
+    return "\n".join(lines)
+
+def format_ip_report(data):
+    lines = []
+    lines.append("🌐 <b>Отчёт по IP-адресу</b>")
+    if data.get('status') == 'success':
+        for key in ["country", "regionName", "city", "zip", "lat", "lon", "timezone", "isp", "org", "as"]:
+            if key in data and data[key]:
+                lines.append(f"• <b>{key.capitalize()}:</b> {html.escape(str(data[key]))}")
+    else:
+        lines.append(f"❌ Ошибка: {html.escape(data.get('message', 'Неизвестно'))}")
+    return "\n".join(lines)
+
+def format_domain_report(data):
+    lines = []
+    lines.append("🏠 <b>Отчёт по домену</b>")
+    for key in ["domain_name", "registrar", "creation_date", "expiration_date", "name_servers", "emails"]:
+        if key in data and data[key]:
+            val = data[key]
+            if isinstance(val, list):
+                val = ", ".join(val)
+            lines.append(f"• <b>{key.replace('_', ' ').capitalize()}:</b> {html.escape(str(val))}")
+    return "\n".join(lines)
+
+def format_nick_report(data):
+    lines = []
+    lines.append("🔎 <b>Результаты по никнейму</b>")
+    for platform, url in data.items():
+        if url:
+            lines.append(f"• <b>{platform.capitalize()}:</b> {html.escape(url)}")
         else:
-            json_str = json.dumps(data, ensure_ascii=False, indent=2)
-            output = f"<b>Результаты ({html.escape(search_type)}):</b>\n<pre>{html.escape(json_str[:3000])}</pre>"
-    output += "\n\n<blockquote>Данные из открытых источников.</blockquote>"
-    await message.answer(output, parse_mode="HTML")
-    db.add_log(message.from_user.id, f"search_{search_type}", query, output[:500])
+            lines.append(f"• {platform.capitalize()}: не найден")
+    return "\n".join(lines)
+
+def create_txt_report(data, search_type, query):
+    lines = []
+    lines.append(f"Отчёт Phantom по запросу: {query}")
+    lines.append(f"Тип поиска: {search_type}")
+    lines.append(f"Дата: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("-" * 50)
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, list):
+                lines.append(f"{key}:")
+                for item in value:
+                    if isinstance(item, dict):
+                        for k, v in item.items():
+                            lines.append(f"  {k}: {v}")
+                    else:
+                        lines.append(f"  {item}")
+            else:
+                lines.append(f"{key}: {value}")
+    elif isinstance(data, list):
+        for idx, item in enumerate(data, 1):
+            lines.append(f"Результат {idx}:")
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    lines.append(f"  {k}: {v}")
+            else:
+                lines.append(f"  {item}")
+    else:
+        lines.append(str(data))
+    return "\n".join(lines)
 
 # ---------- АДМИН-КОЛБЭКИ ----------
 @dp.callback_query(lambda c: c.data.startswith("admin_"))
