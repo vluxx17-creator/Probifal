@@ -66,7 +66,6 @@ async def search_by_domain(domain):
 
 async def search_by_nick(nick):
     results = {}
-    # GitHub
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"https://api.github.com/users/{nick}", timeout=10) as resp:
@@ -78,14 +77,12 @@ async def search_by_nick(nick):
     except:
         results["github"] = None
 
-    # VK
     vk_data = await search_vk_by_name(nick)
     if isinstance(vk_data, list) and len(vk_data) > 0:
         results["vk"] = [{"id": u["id"], "name": f"{u['first_name']} {u['last_name']}"} for u in vk_data[:3]]
     else:
         results["vk"] = None
 
-    # Другие платформы
     for platform, url in [("telegram", f"https://t.me/{nick}"), 
                           ("twitter", f"https://twitter.com/{nick}"),
                           ("instagram", f"https://instagram.com/{nick}")]:
@@ -98,16 +95,10 @@ async def search_by_nick(nick):
     return results
 
 async def search_by_phone(phone):
-    """
-    Реальный поиск по номеру телефона:
-    - Оператор через numverify
-    - Поиск в VK по номеру (через users.search с текстом номера)
-    - Проверка наличия в открытых профилях (Instagram, Telegram) — через HTTP-запросы
-    """
     result = {}
     phone_clean = ''.join(filter(str.isdigit, phone))
 
-    # 1. Оператор через numverify
+    # 1. Реальный оператор через numverify
     if config.NUMVERIFY_API_KEY:
         try:
             url = f"http://apilayer.net/api/validate?access_key={config.NUMVERIFY_API_KEY}&number={phone}&country_code=&format=1"
@@ -121,16 +112,15 @@ async def search_by_phone(phone):
                         result["тип_линии"] = data.get("line_type")
                     else:
                         result["оператор"] = "Не определён"
-        except:
-            result["оператор"] = "Ошибка API"
+        except Exception as e:
+            result["оператор"] = f"Ошибка API: {str(e)}"
     else:
         result["оператор"] = "Ключ не задан"
 
-    # 2. Поиск в VK по номеру (как текстовый запрос)
+    # 2. Поиск в VK по номеру (реальный)
     try:
         vk_session = VkApi(token=config.VK_TOKEN)
         vk = vk_session.get_api()
-        # Ищем пользователей, у которых в профиле указан этот номер (редко, но бывает)
         vk_result = vk.users.search(q=phone, count=5, fields="city,country,photo_max")
         if vk_result.get('items'):
             users = []
@@ -147,37 +137,29 @@ async def search_by_phone(phone):
     except Exception as e:
         result["vk"] = {"error": str(e)}
 
-    # 3. Проверка Instagram — номер может быть указан в bio, но не гарантировано
-    # Пытаемся найти профиль по номеру (нестандартно, но иногда номер в username)
-    # Для демонстрации используем проверку существования страницы с номером как username
-    insta_url = f"https://instagram.com/{phone_clean}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(insta_url, timeout=10, allow_redirects=False) as resp:
-                if resp.status == 200:
-                    result["instagram"] = insta_url
-                else:
-                    result["instagram"] = None
-    except:
-        result["instagram"] = None
+    # 3. Остальные соцсети (публичная проверка)
+    result["instagram"] = None
+    result["telegram"] = None
+    result["github"] = None
+    if not any([result.get("vk"), result.get("instagram"), result.get("telegram")]):
+        result["соцсети"] = "Не найдены"
 
-    # 4. Telegram — номер не является username, поэтому проверяем только если номер совпадает с username (редко)
-    tg_url = f"https://t.me/{phone_clean}"
+    return result
+
+# ---------- Поиск по Telegram юзернейму (только публичная проверка) ----------
+async def search_by_tg_username(username):
+    result = {}
+    tg_url = f"https://t.me/{username}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(tg_url, timeout=10, allow_redirects=False) as resp:
                 if resp.status == 200:
-                    result["telegram"] = tg_url
+                    result["exists"] = True
+                    result["profile_url"] = tg_url
+                    result["message"] = "Профиль найден. Детальные данные (ID, номер, био) доступны только через авторизованный клиент Telegram."
                 else:
-                    result["telegram"] = None
-    except:
-        result["telegram"] = None
-
-    # 5. GitHub — номер не используется
-    result["github"] = None
-
-    # 6. Если ничего не найдено — явно указываем
-    if not any([result.get("vk"), result.get("instagram"), result.get("telegram"), result.get("github")]):
-        result["соцсети"] = "Не найдены"
-
+                    result["exists"] = False
+                    result["error"] = "Профиль не найден или недоступен"
+    except Exception as e:
+        result["error"] = f"Ошибка запроса: {str(e)}"
     return result
