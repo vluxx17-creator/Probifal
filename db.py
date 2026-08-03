@@ -98,7 +98,6 @@ def get_all_logs(limit=100):
     conn.close()
     return rows
 
-# ---------- Баланс запросов ----------
 def get_balance(user_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -131,7 +130,6 @@ def can_make_request(user_id):
         return False, "У вас закончились запросы. Пополните баланс в разделе «Купить запросы»."
     return True, None
 
-# ---------- Клоны ----------
 def add_clone(token, owner_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
