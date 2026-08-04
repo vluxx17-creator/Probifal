@@ -8,7 +8,6 @@ import config
 from bot_handlers import dp, bot
 import db
 
-# Функция запуска бота-клона (если есть)
 async def start_clone_bot(token, owner_id):
     from bot_handlers import dp as clone_dp
     clone_bot = Bot(token=token)
@@ -30,14 +29,14 @@ async def set_commands():
         BotCommand(command="admin", description="Админ-панель")
     ])
 
-# Функция запуска бота (поллинг)
+# Основная функция бота — запускается в главном потоке
 async def bot_polling():
     await set_commands()
-    await bot.delete_webhook(drop_pending_updates=True)  # убираем вебхук, если был
+    await bot.delete_webhook(drop_pending_updates=True)
     await start_all_clones()
     await dp.start_polling(bot, skip_updates=True)
 
-# Функция запуска веб-сервера (для Render)
+# Функция веб-сервера (будет запущена в фоновом потоке)
 def run_web():
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("web_app:app", host="0.0.0.0", port=port)
@@ -45,9 +44,9 @@ def run_web():
 if __name__ == "__main__":
     db.init_db()
     
-    # Запускаем бота в отдельном потоке (чтобы не блокировать веб-сервер)
-    bot_thread = threading.Thread(target=lambda: asyncio.run(bot_polling()), daemon=True)
-    bot_thread.start()
+    # Запускаем веб-сервер в фоновом потоке (чтобы не мешал боту)
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
     
-    # Запускаем веб-сервер в основном потоке (он будет слушать порт)
-    run_web()
+    # Запускаем бота в основном потоке (asyncio)
+    asyncio.run(bot_polling())
